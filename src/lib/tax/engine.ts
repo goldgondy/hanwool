@@ -13,6 +13,7 @@ import {
 // - 코인 간 교환(예: USDT→BTC)은 호출자가 dispose(USDT) + acquire(BTC) 두 이벤트로 넘긴다.
 // - 과세 시작 전 이벤트도 모두 처리해 실제 취득가액(이동평균)을 구하고,
 //   과세 시작 시점에 보유분의 취득가액을 max(실제 취득가액, 2026년 말 시가 × 수량)로 올린다.
+//   의제취득가는 시행일 이전 보유분에만 적용하며, 이후 취득분은 실제 취득가액으로만 풀에 더해진다.
 // - 자기 지갑 간 이체는 이벤트로 넘기지 않는다. 풀은 자산별로 납세자 전체에 하나다.
 
 export type TaxEvent =
@@ -44,12 +45,12 @@ export type TaxEvent =
     };
 
 export interface EnginePolicy {
-  // carry: 수량만 줄이고 원가는 남은 보유분에 얹는다 (손실 인식을 이연, 보수적)
-  // expense: 양도가액 0인 양도로 보아 해당 수량의 원가만큼 손실을 인식한다
+  // expense: 양도가액 0인 양도로 보아 해당 수량의 원가만큼 즉시 손실을 인식한다 (기본값)
+  // carry: 수량만 줄이고 원가는 남은 보유분에 얹는다 (손실 인식을 이연)
   feeTreatment: "carry" | "expense";
 }
 
-export const DEFAULT_POLICY: EnginePolicy = { feeTreatment: "carry" };
+export const DEFAULT_POLICY: EnginePolicy = { feeTreatment: "expense" };
 
 export interface Disposal {
   ref: string;

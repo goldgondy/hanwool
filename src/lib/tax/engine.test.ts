@@ -113,6 +113,22 @@ describe("의제취득가액", () => {
     expect(r.pools.get("SOL")!.costKrw.toNumber()).toBe(600_000);
   });
 
+  it("시행일 이후 취득분에는 의제취득가를 적용하지 않는다", () => {
+    const r = runEngine(
+      [
+        buy("2026-06-01T00:00:00", "ETH", 1, 3_000_000),
+        buy("2027-03-01T00:00:00", "ETH", 1, 4_000_000),
+        sell("2027-06-01T00:00:00", "ETH", 2, 12_000_000),
+      ],
+      { ETH: D(5_000_000) },
+    );
+    // 시행일 이전 1개만 3,000,000 → 5,000,000으로 올라가고, 이후 취득분은 4,000,000 그대로
+    expect(r.deemed).toHaveLength(1);
+    expect(r.deemed[0].qty.toNumber()).toBe(1);
+    expect(r.disposals[0].costKrw.toNumber()).toBe(9_000_000);
+    expect(r.disposals[0].gainKrw.toNumber()).toBe(3_000_000);
+  });
+
   it("2026년 말 시가가 없으면 경고하고 실제 취득가를 쓴다", () => {
     const r = runEngine([buy("2026-05-01T00:00:00", "XYZ", 1, 1000)], {});
     expect(r.deemed[0].fairValueKrw).toBeNull();
@@ -241,6 +257,11 @@ describe("코인 수수료 정책", () => {
     fee("2027-01-06T00:00:00", "BNB", 1),
     sell("2027-02-01T00:00:00", "BNB", 9, 1_000_000),
   ];
+
+  it("기본 정책은 즉시 손실 인식(expense)이다", () => {
+    const r = runEngine(events(), {});
+    expect(r.disposals.map((d) => d.gainKrw.toNumber())).toEqual([-100_000, 100_000]);
+  });
 
   it("carry: 원가를 남은 보유분에 얹는다", () => {
     const r = runEngine(events(), {}, { feeTreatment: "carry" });
