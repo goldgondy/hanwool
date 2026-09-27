@@ -4,11 +4,18 @@
 // - 요청/응답 내용을 로그로 남기지 않는다.
 // - 바이낸스는 미국 IP를 차단하므로 서울 리전 등에 배포해야 한다.
 
-const BINANCE_BASE = "https://api.binance.com";
+const SPOT = "https://api.binance.com";
+const USDM = "https://fapi.binance.com";
+const COINM = "https://dapi.binance.com";
 
-const ALLOWED: Record<string, "GET" | "POST"> = {
-  "/api/v3/account": "GET",
-  "/sapi/v1/asset/get-funding-asset": "POST",
+const ALLOWED: Record<string, { host: string; method: "GET" | "POST" }> = {
+  "/api/v3/account": { host: SPOT, method: "GET" },
+  "/sapi/v1/asset/get-funding-asset": { host: SPOT, method: "POST" },
+  "/sapi/v1/simple-earn/flexible/position": { host: SPOT, method: "GET" },
+  "/sapi/v1/simple-earn/locked/position": { host: SPOT, method: "GET" },
+  "/sapi/v1/margin/account": { host: SPOT, method: "GET" },
+  "/fapi/v3/balance": { host: USDM, method: "GET" },
+  "/dapi/v1/balance": { host: COINM, method: "GET" },
 };
 
 export async function POST(request: Request) {
@@ -28,16 +35,16 @@ export async function POST(request: Request) {
     return Response.json({ error: "잘못된 요청" }, { status: 400 });
   }
 
-  const method = ALLOWED[path];
-  if (!method) {
+  const target = ALLOWED[path];
+  if (!target) {
     return Response.json({ error: "허용되지 않은 엔드포인트" }, { status: 403 });
   }
   if (!query.includes("signature=")) {
     return Response.json({ error: "서명 누락" }, { status: 400 });
   }
 
-  const upstream = await fetch(`${BINANCE_BASE}${path}?${query}`, {
-    method,
+  const upstream = await fetch(`${target.host}${path}?${query}`, {
+    method: target.method,
     headers: { "X-MBX-APIKEY": apiKey },
     cache: "no-store",
   });

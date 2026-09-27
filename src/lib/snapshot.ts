@@ -35,7 +35,9 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
       try {
         let balances: RawBalance[];
         if (s.kind === "binance") {
-          balances = await fetchBinanceBalances(s);
+          balances = await fetchBinanceBalances(s, (message) =>
+            errors.push({ sourceLabel: s.label, message }),
+          );
         } else if (s.kind === "okx") {
           balances = await fetchOkxBalances(s);
         } else {

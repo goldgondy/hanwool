@@ -117,7 +117,8 @@ export default function SnapshotPage() {
       {snapshot.errors.length > 0 && (
         <section className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm dark:border-red-800 dark:bg-red-950/40">
           <p className="font-medium text-red-700 dark:text-red-400">
-            일부 계정을 조회하지 못했습니다. 이 기록에 포함되지 않았습니다.
+            일부 계정이나 항목을 조회하지 못했습니다. 해당 부분은 이 기록에
+            포함되지 않았습니다.
           </p>
           <ul className="mt-2 list-disc pl-5">
             {snapshot.errors.map((e, i) => (
