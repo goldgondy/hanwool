@@ -136,6 +136,21 @@ db.version(3).stores({
   syncState: "key",
 });
 
+// v4: EVM 데이터 소스를 Alchemy → Blockscout으로 교체. 항목 ID 규칙이 바뀌어 원장을 다시 동기화한다.
+db.version(4)
+  .stores({
+    sources: "id, kind, createdAt",
+    snapshots: "id, takenAt",
+    settings: "key",
+    ledger: "id, sourceId, time, groupId, [sourceId+assetKey]",
+    syncState: "key",
+  })
+  .upgrade(async (tx) => {
+    await tx.table("ledger").clear();
+    await tx.table("syncState").clear();
+    await tx.table("settings").delete("alchemyKey");
+  });
+
 export async function getSetting(key: string): Promise<string | undefined> {
   return (await db.settings.get(key))?.value;
 }

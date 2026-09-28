@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, getSetting, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
+import { db, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
 import { formatAmount, formatDateTime } from "@/lib/format";
 import { syncEvmHistory, type ChainSyncResult } from "@/lib/ledger/evm-sync";
 import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
@@ -109,11 +109,9 @@ function EvmLedger({ source }: { source: EvmSource }) {
     setBusy(true);
     setError(null);
     try {
-      const key = await getSetting("alchemyKey");
-      if (!key) throw new Error("연결 계정 화면에서 Alchemy API 키를 먼저 저장하세요");
-      if (withSync) setResults(await syncEvmHistory(source, key, setProgress));
+      if (withSync) setResults(await syncEvmHistory(source, setProgress));
       setProgress("실제 잔고 조회 중");
-      const balances = await fetchEvmBalances(source, key);
+      const balances = await fetchEvmBalances(source);
       const all = await db.ledger.where("sourceId").equals(source.id).toArray();
       setRows(reconcile(all, balances));
     } catch (e) {
@@ -144,15 +142,14 @@ function EvmLedger({ source }: { source: EvmSource }) {
       {results && (
         <ul className="space-y-1 text-sm">
           {results.map((r) => {
-            const gap = r.sentTxCount - r.gasRecordedCount;
+            const gap = r.sentTxCount === null ? 0 : r.sentTxCount - r.gasRecordedCount;
             return (
               <li key={r.chain}>
                 <b>{EVM_CHAINS[r.chain].name}</b>: 항목 {r.added}건 반영
                 {gap > 0 && (
                   <span className="text-amber-700 dark:text-amber-400">
                     {" "}
-                    · 보낸 트랜잭션 {r.sentTxCount}건 중 {gap}건의 가스비 미확인 (approve, 실패한
-                    트랜잭션 등 토큰 이동이 없는 거래)
+                    · 보낸 트랜잭션 {r.sentTxCount}건 중 {gap}건의 가스비가 원장에 없습니다
                   </span>
                 )}
                 {r.warnings.map((w, i) => (

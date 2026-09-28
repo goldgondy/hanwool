@@ -1,10 +1,10 @@
 import { db, type EvmChain, type EvmSource } from "@/lib/db";
-import { EVM_CHAINS, evmAssetKey, rpcBatch } from "@/lib/sources/evm";
+import { EVM_CHAINS, blockscoutPages, blockscoutRpc, evmAssetKey } from "@/lib/sources/evm";
 import {
   buildEvmEntries,
-  type AlchemyTransfer,
-  type TokenMeta,
-  type TxReceipt,
+  type InternalTx,
+  type NativeTx,
+  type TokenTransfer,
 } from "@/lib/ledger/evm-build";
 
 export interface ChainSyncResult {
@@ -13,144 +13,140 @@ export interface ChainSyncResult {
   skipped: number;
   warnings: string[];
   // 주소가 보낸 트랜잭션 수(nonce)와 원장에 가스비가 기록된 트랜잭션 수.
-  // 차이가 있으면 토큰 이동이 없는 트랜잭션(approve, 실패한 트랜잭션 등)의 가스비가 누락된 것이다.
-  sentTxCount: number;
+  // 차이가 있으면 일부 트랜잭션이 누락된 것이다. nonce를 조회하지 못하면 null.
+  sentTxCount: number | null;
   gasRecordedCount: number;
 }
 
-const BASE_CATEGORIES = ["external", "erc20"];
-
-async function fetchTransfers(
-  alchemyKey: string,
-  network: string,
-  params: Record<string, unknown>,
-): Promise<AlchemyTransfer[]> {
-  const out: AlchemyTransfer[] = [];
-  let pageKey: string | undefined;
-  do {
-    const [page] = await rpcBatch<{ transfers: AlchemyTransfer[]; pageKey?: string }>(
-      alchemyKey,
-      network,
-      [
-        {
-          method: "alchemy_getAssetTransfers",
-          params: [
-            {
-              toBlock: "latest",
-              withMetadata: true,
-              excludeZeroValue: true,
-              maxCount: "0x3e8",
-              ...params,
-              ...(pageKey ? { pageKey } : {}),
-            },
-          ],
-        },
-      ],
-    );
-    out.push(...page.transfers);
-    pageKey = page.pageKey;
-  } while (pageKey);
-  return out;
+// Blockscout 응답 형식 (버전에 따라 필드 이름이 조금 다를 수 있어 둘 다 받는다)
+type Addr = { hash: string } | null;
+interface BsTx {
+  hash: string;
+  from: Addr;
+  to: Addr;
+  value: string;
+  fee: { value: string } | null;
+  result: string;
+  timestamp: string;
+  block_number?: number;
+  block?: number;
+}
+interface BsInternal {
+  transaction_hash: string;
+  index: number;
+  from: Addr;
+  to: Addr;
+  value: string;
+  success: boolean;
+  timestamp: string;
+  block_number?: number;
+  block?: number;
+}
+interface BsTokenTransfer {
+  transaction_hash?: string;
+  tx_hash?: string;
+  log_index: number;
+  from: Addr;
+  to: Addr;
+  total: { value: string; decimals: string | null } | null;
+  token: { address?: string; address_hash?: string; symbol: string | null; decimals: string | null; type: string };
+  timestamp: string;
+  block_number?: number;
+  block?: number;
 }
 
-async function inBatches<T, R>(items: T[], size: number, fn: (chunk: T[]) => Promise<R[]>) {
-  const out: R[] = [];
-  for (let i = 0; i < items.length; i += size) out.push(...(await fn(items.slice(i, i + size))));
-  return out;
+const blockOf = (x: { block_number?: number; block?: number }) => x.block_number ?? x.block ?? 0;
+
+async function fetchNonce(chain: EvmChain, address: string): Promise<number | null> {
+  const hex = await blockscoutRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]);
+  return hex ? parseInt(hex, 16) : null;
+}
+
+// fromBlock 이후(포함)의 내역을 Blockscout에서 가져와 정규화한다. DB에는 접근하지 않는다.
+export async function fetchChainHistory(
+  address: string,
+  chain: EvmChain,
+  fromBlock = 0,
+  onProgress: (msg: string) => void = () => {},
+): Promise<{ txs: NativeTx[]; internal: InternalTx[]; tokens: TokenTransfer[]; maxBlock: number }> {
+  const { name } = EVM_CHAINS[chain];
+  // 최신 항목부터 오므로, 이미 가져온 블록보다 이전 항목이 나오면 멈춘다.
+  // 마지막 블록은 다시 가져오며, 항목 ID가 결정적이라 중복되지 않는다.
+  const stop = (x: { block_number?: number; block?: number }) => blockOf(x) < fromBlock;
+  const base = `/api/v2/addresses/${address}`;
+
+  onProgress(`${name}: 트랜잭션 조회 중`);
+  const txs = await blockscoutPages<BsTx>(chain, `${base}/transactions`, {}, stop);
+  onProgress(`${name}: 내부 트랜잭션 조회 중`);
+  const internal = await blockscoutPages<BsInternal>(chain, `${base}/internal-transactions`, {}, stop);
+  onProgress(`${name}: 토큰 전송 조회 중`);
+  const tokens = await blockscoutPages<BsTokenTransfer>(chain, `${base}/token-transfers`, { type: "ERC-20" }, stop);
+
+  return {
+    maxBlock: [...txs, ...internal, ...tokens].reduce((m, x) => Math.max(m, blockOf(x)), fromBlock),
+    txs: txs.map(
+      (t): NativeTx => ({
+        hash: t.hash,
+        from: t.from?.hash ?? "",
+        to: t.to?.hash ?? null,
+        value: t.value ?? "0",
+        fee: t.fee?.value ?? "0",
+        success: t.result === "success",
+        time: Date.parse(t.timestamp),
+      }),
+    ),
+    internal: internal.map(
+      (t): InternalTx => ({
+        hash: t.transaction_hash,
+        index: t.index,
+        from: t.from?.hash ?? "",
+        to: t.to?.hash ?? null,
+        value: t.value ?? "0",
+        success: t.success,
+        time: Date.parse(t.timestamp),
+      }),
+    ),
+    tokens: tokens.map(
+      (t): TokenTransfer => ({
+        hash: t.transaction_hash ?? t.tx_hash ?? "",
+        logIndex: t.log_index,
+        from: t.from?.hash ?? "",
+        to: t.to?.hash ?? "",
+        value: t.total?.value ?? "0",
+        decimals: t.total?.decimals != null ? Number(t.total.decimals) : t.token.decimals != null ? Number(t.token.decimals) : null,
+        token: t.token.address ?? t.token.address_hash ?? "",
+        symbol: t.token.symbol,
+        time: Date.parse(t.timestamp),
+      }),
+    ),
+  };
 }
 
 async function syncChain(
   source: EvmSource,
-  alchemyKey: string,
   chain: EvmChain,
   onProgress: (msg: string) => void,
 ): Promise<ChainSyncResult> {
-  const { name, network } = EVM_CHAINS[chain];
+  const { name } = EVM_CHAINS[chain];
   const address = source.address;
   const warnings: string[] = [];
   const stateKey = `${source.id}:${chain}`;
-  const fromBlock = (await db.syncState.get(stateKey))?.cursor ?? "0x0";
+  const fromBlock = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
 
-  // 내부 트랜잭션(컨트랙트가 보낸 네이티브 코인)은 일부 체인만 지원한다. 미지원이면 제외하고 경고한다.
-  let categories = [...BASE_CATEGORIES, "internal"];
-  const both = (cats: string[]) =>
-    Promise.all([
-      fetchTransfers(alchemyKey, network, { fromBlock, toAddress: address, category: cats }),
-      fetchTransfers(alchemyKey, network, { fromBlock, fromAddress: address, category: cats }),
-    ]);
-
-  onProgress(`${name}: 전송 내역 조회 중`);
-  let incoming: AlchemyTransfer[];
-  let outgoing: AlchemyTransfer[];
-  try {
-    [incoming, outgoing] = await both(categories);
-  } catch (e) {
-    if (!(e instanceof Error) || !/internal/i.test(e.message)) throw e;
-    categories = BASE_CATEGORIES;
-    warnings.push(
-      `${name}: 내부 트랜잭션 조회를 지원하지 않아, 컨트랙트가 보낸 ${EVM_CHAINS[chain].native} 입금이 누락될 수 있습니다`,
-    );
-    [incoming, outgoing] = await both(categories);
-  }
-
-  // 소수점 자릿수가 비어 있는 토큰 메타데이터
-  const unknownContracts = [
-    ...new Set(
-      [...incoming, ...outgoing]
-        .filter((t) => t.rawContract.address && t.rawContract.decimal == null)
-        .map((t) => t.rawContract.address!.toLowerCase()),
-    ),
-  ];
-  const metas = await inBatches(unknownContracts, 100, (chunk) =>
-    rpcBatch<TokenMeta>(alchemyKey, network, chunk.map((c) => ({ method: "alchemy_getTokenMetadata", params: [c] }))),
-  );
-  const tokenMeta = Object.fromEntries(unknownContracts.map((c, i) => [c, metas[i]]));
-
-  const hashes = [...new Set([...incoming, ...outgoing].map((t) => t.hash))];
-  let done = 0;
-  // 영수증 조회는 건당 CU 비용이 커서 작은 묶음으로 나눈다.
-  const receipts = await inBatches(hashes, 20, async (chunk) => {
-    const r = await rpcBatch<TxReceipt>(
-      alchemyKey,
-      network,
-      chunk.map((h) => ({ method: "eth_getTransactionReceipt", params: [h] })),
-    );
-    done += chunk.length;
-    onProgress(`${name}: 가스비 확인 중 (${done}/${hashes.length})`);
-    return r;
-  });
-
-  const { entries, skipped } = buildEvmEntries({
-    sourceId: source.id,
-    chain,
-    address,
-    incoming,
-    outgoing,
-    receipts: receipts.filter(Boolean),
-    tokenMeta,
-  });
+  const { txs, internal, tokens, maxBlock } = await fetchChainHistory(address, chain, fromBlock, onProgress);
+  const { entries, skipped } = buildEvmEntries({ sourceId: source.id, chain, address, txs, internal, tokens });
   if (skipped.length > 0) {
     warnings.push(`${name}: ${skipped.length}건은 수량을 해석하지 못해 제외했습니다`);
   }
 
-  const maxBlock = [...incoming, ...outgoing].reduce(
-    (m, t) => (BigInt(t.blockNum) > BigInt(m) ? t.blockNum : m),
-    fromBlock,
-  );
-
   await db.transaction("rw", db.ledger, db.syncState, async () => {
     await db.ledger.bulkPut(entries);
-    // 마지막 블록부터 다시 조회한다(같은 블록의 누락 방지). 항목 ID가 결정적이라 중복되지 않는다.
-    await db.syncState.put({ key: stateKey, cursor: maxBlock, syncedAt: Date.now() });
+    await db.syncState.put({ key: stateKey, cursor: String(maxBlock), syncedAt: Date.now() });
   });
 
-  const [nonceHex] = await rpcBatch<string>(alchemyKey, network, [
-    { method: "eth_getTransactionCount", params: [address, "latest"] },
-  ]);
-  const nativeKey = evmAssetKey(chain, null);
   const gasRecordedCount = await db.ledger
     .where("[sourceId+assetKey]")
-    .equals([source.id, nativeKey])
+    .equals([source.id, evmAssetKey(chain, null)])
     .filter((e) => e.kind === "fee")
     .count();
 
@@ -159,20 +155,19 @@ async function syncChain(
     added: entries.length,
     skipped: skipped.length,
     warnings,
-    sentTxCount: parseInt(nonceHex, 16),
+    sentTxCount: await fetchNonce(chain, address),
     gasRecordedCount,
   };
 }
 
 export async function syncEvmHistory(
   source: EvmSource,
-  alchemyKey: string,
   onProgress: (msg: string) => void = () => {},
 ): Promise<ChainSyncResult[]> {
-  // 체인별로 순서대로 처리해 Alchemy 요청 한도를 넘지 않게 한다.
+  // 공개 API 속도 제한을 넘지 않도록 체인별로 순서대로 처리한다.
   const results: ChainSyncResult[] = [];
   for (const chain of source.chains) {
-    results.push(await syncChain(source, alchemyKey, chain, onProgress));
+    results.push(await syncChain(source, chain, onProgress));
   }
   return results;
 }

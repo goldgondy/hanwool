@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, getSetting, setSetting, type EvmChain } from "@/lib/db";
+import { db, type EvmChain } from "@/lib/db";
 import { EVM_CHAINS } from "@/lib/sources/evm";
 import { encrypt } from "@/lib/vault";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
@@ -125,6 +125,10 @@ function EvmForm() {
   return (
     <form onSubmit={onSubmit} className={card}>
       <h3 className="font-semibold">EVM 지갑 주소</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        공개 블록체인 데이터(Blockscout)를 조회하므로 API 키가 필요 없습니다. 주소만으로는 자산을
+        옮길 수 없지만, <b>복구 문구(시드)나 개인키는 절대 입력하지 마세요.</b>
+      </p>
       <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
       <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="0x…" required />
       <div className="flex flex-wrap gap-3 text-sm">
@@ -148,28 +152,13 @@ function EvmForm() {
   );
 }
 
-function AlchemyKeyForm() {
-  const saved = useLiveQuery(() => getSetting("alchemyKey"), []);
-  const [key, setKey] = useState("");
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    await setSetting("alchemyKey", key.trim());
-    setKey("");
-  }
-
-  return (
-    <form onSubmit={onSubmit} className={card}>
-      <h3 className="font-semibold">Alchemy API 키</h3>
-      <p className="text-xs leading-5 text-stone-500">
-        지갑 잔고 조회에 사용합니다. alchemy.com에서 무료로 발급받을 수 있고,
-        브라우저에서 Alchemy로 직접 요청합니다.
-        {saved && <> 현재 저장된 키: <code>{mask(saved)}</code></>}
-      </p>
-      <input className={input} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Alchemy API Key" required />
-      <button className={button}>저장</button>
-    </form>
-  );
+// 계정과 함께 그 계정의 원장·동기화 상태도 지운다.
+async function removeSource(id: string) {
+  await db.transaction("rw", db.sources, db.ledger, db.syncState, async () => {
+    await db.sources.delete(id);
+    await db.ledger.where("sourceId").equals(id).delete();
+    await db.syncState.where("key").startsWith(`${id}:`).delete();
+  });
 }
 
 export default function SourcesPage() {
@@ -202,7 +191,7 @@ export default function SourcesPage() {
                       .join(", ")}`}
               </code>
               <button
-                onClick={() => db.sources.delete(s.id)}
+                onClick={() => removeSource(s.id)}
                 className="ml-auto text-xs text-red-600 hover:underline"
               >
                 삭제
@@ -216,7 +205,6 @@ export default function SourcesPage() {
         <BinanceForm />
         <OkxForm />
         <EvmForm />
-        <AlchemyKeyForm />
       </div>
     </div>
   );

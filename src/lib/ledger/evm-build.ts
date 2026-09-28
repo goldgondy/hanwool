@@ -2,123 +2,118 @@ import Decimal from "@/lib/decimal";
 import type { EvmChain, LedgerEntry } from "@/lib/db";
 import { EVM_CHAINS, evmAssetKey, fromBaseUnits } from "@/lib/sources/evm";
 
-// Alchemy alchemy_getAssetTransfers 응답 항목
-export interface AlchemyTransfer {
-  uniqueId: string;
+// Blockscout 응답을 정규화한 입력 형식. 금액은 모두 최소 단위(wei 등)의 정수 문자열이다.
+
+// 주소가 보내거나 받은 일반 트랜잭션 (approve·실패한 트랜잭션 포함)
+export interface NativeTx {
   hash: string;
-  blockNum: string; // hex
   from: string;
   to: string | null;
-  value: number | null;
-  asset: string | null;
-  category: string;
-  rawContract: { value: string | null; address: string | null; decimal: string | null };
-  metadata: { blockTimestamp: string };
+  value: string;
+  fee: string; // 실제 지불한 수수료 (OP 스택 L2는 L1 수수료 포함)
+  success: boolean;
+  time: number;
 }
 
-export interface TxReceipt {
-  transactionHash: string;
+// 컨트랙트가 보낸 네이티브 코인 (예: DEX에서 ETH로 스왑해 받은 금액)
+export interface InternalTx {
+  hash: string;
+  index: number;
   from: string;
-  gasUsed: string; // hex
-  effectiveGasPrice: string; // hex
-  l1Fee?: string; // hex, OP 스택 L2 (Base, Optimism)
+  to: string | null;
+  value: string;
+  success: boolean;
+  time: number;
 }
 
-export interface TokenMeta {
-  symbol: string | null;
+export interface TokenTransfer {
+  hash: string;
+  logIndex: number;
+  from: string;
+  to: string;
+  value: string;
   decimals: number | null;
+  token: string; // 컨트랙트 주소
+  symbol: string | null;
+  time: number;
 }
 
 export interface BuildInput {
   sourceId: string;
   chain: EvmChain;
   address: string;
-  incoming: AlchemyTransfer[];
-  outgoing: AlchemyTransfer[];
-  receipts: TxReceipt[];
-  // rawContract.decimal이 비어 있는 토큰의 메타데이터 (소문자 컨트랙트 주소 → 메타)
-  tokenMeta: Record<string, TokenMeta>;
+  txs: NativeTx[];
+  internal: InternalTx[];
+  tokens: TokenTransfer[];
 }
 
 export interface BuildResult {
   entries: LedgerEntry[];
-  skipped: { uniqueId: string; reason: string }[];
+  skipped: { id: string; reason: string }[];
 }
 
 export function buildEvmEntries(input: BuildInput): BuildResult {
-  const { sourceId, chain, tokenMeta } = input;
-  const address = input.address.toLowerCase();
+  const { sourceId, chain } = input;
+  const me = input.address.toLowerCase();
   const { name: location, native } = EVM_CHAINS[chain];
+  const nativeKey = evmAssetKey(chain, null);
 
   const entries: LedgerEntry[] = [];
   const skipped: BuildResult["skipped"] = [];
-  const txTime = new Map<string, number>();
 
-  const legs: [AlchemyTransfer, "in" | "out"][] = [
-    ...input.incoming.map((t) => [t, "in"] as [AlchemyTransfer, "in"]),
-    ...input.outgoing.map((t) => [t, "out"] as [AlchemyTransfer, "out"]),
-  ];
-
-  for (const [t, dir] of legs) {
-    const time = Date.parse(t.metadata.blockTimestamp);
-    txTime.set(t.hash, time);
-
-    const contract = t.rawContract.address?.toLowerCase() ?? null;
-    let decimals: number | null;
-    let symbol: string;
-    if (!contract) {
-      decimals = 18;
-      symbol = native;
-    } else {
-      const meta = tokenMeta[contract];
-      decimals = t.rawContract.decimal != null ? parseInt(t.rawContract.decimal, 16) : (meta?.decimals ?? null);
-      symbol = (t.asset ?? meta?.symbol ?? "UNKNOWN").toUpperCase();
-    }
-
-    let amount: Decimal;
-    if (t.rawContract.value != null && decimals != null) {
-      amount = fromBaseUnits(t.rawContract.value, decimals);
-    } else if (t.value != null) {
-      amount = new Decimal(t.value); // 정밀도가 떨어질 수 있는 대체 값
-    } else {
-      skipped.push({ uniqueId: t.uniqueId, reason: "수량 또는 소수점 자릿수를 알 수 없음" });
-      continue;
-    }
-    if (amount.isZero()) continue;
-
+  const push = (
+    suffix: string,
+    hash: string,
+    time: number,
+    asset: string,
+    assetKey: string,
+    amount: Decimal,
+    kind: LedgerEntry["kind"],
+    counterparty?: string | null,
+  ) => {
+    if (amount.isZero()) return;
     entries.push({
-      id: `${sourceId}:${chain}:${t.uniqueId}:${dir}`,
+      id: `${sourceId}:${chain}:${hash}:${suffix}`,
       sourceId,
       location,
       time,
-      asset: symbol,
-      assetKey: evmAssetKey(chain, contract),
-      amount: (dir === "in" ? amount : amount.neg()).toString(),
-      kind: "transfer",
-      groupId: `${chain}:${t.hash}`,
-      txHash: t.hash,
-      counterparty: (dir === "in" ? t.from : t.to) ?? undefined,
+      asset,
+      assetKey,
+      amount: amount.toString(),
+      kind,
+      groupId: `${chain}:${hash}`,
+      txHash: hash,
+      counterparty: counterparty ?? undefined,
     });
+  };
+
+  for (const t of input.txs) {
+    const fromMe = t.from.toLowerCase() === me;
+    const toMe = t.to?.toLowerCase() === me;
+    const value = fromBaseUnits(t.value, 18);
+    // 실패한 트랜잭션은 금액이 이동하지 않지만 수수료는 지불된다.
+    if (t.success && fromMe) push("native:out", t.hash, t.time, native, nativeKey, value.neg(), "transfer", t.to);
+    if (t.success && toMe) push("native:in", t.hash, t.time, native, nativeKey, value, "transfer", t.from);
+    if (fromMe) push("gas", t.hash, t.time, native, nativeKey, fromBaseUnits(t.fee, 18).neg(), "fee");
   }
 
-  // 내가 보낸 트랜잭션의 가스비
-  for (const r of input.receipts) {
-    if (r.from.toLowerCase() !== address) continue;
-    const wei =
-      BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice) + (r.l1Fee ? BigInt(r.l1Fee) : BigInt(0));
-    if (wei === BigInt(0)) continue;
-    entries.push({
-      id: `${sourceId}:${chain}:${r.transactionHash}:gas`,
-      sourceId,
-      location,
-      time: txTime.get(r.transactionHash) ?? 0,
-      asset: native,
-      assetKey: evmAssetKey(chain, null),
-      amount: fromBaseUnits(`0x${wei.toString(16)}`, 18).neg().toString(),
-      kind: "fee",
-      groupId: `${chain}:${r.transactionHash}`,
-      txHash: r.transactionHash,
-    });
+  for (const t of input.internal) {
+    if (!t.success) continue;
+    const value = fromBaseUnits(t.value, 18);
+    if (t.from.toLowerCase() === me) push(`int:${t.index}:out`, t.hash, t.time, native, nativeKey, value.neg(), "transfer", t.to);
+    if (t.to?.toLowerCase() === me) push(`int:${t.index}:in`, t.hash, t.time, native, nativeKey, value, "transfer", t.from);
+  }
+
+  for (const t of input.tokens) {
+    if (t.decimals == null) {
+      skipped.push({ id: `${t.hash}:${t.logIndex}`, reason: "토큰 소수점 자릿수를 알 수 없음" });
+      continue;
+    }
+    const amount = fromBaseUnits(t.value, t.decimals);
+    const symbol = (t.symbol ?? "UNKNOWN").toUpperCase();
+    const key = evmAssetKey(chain, t.token);
+    if (t.from.toLowerCase() === me) push(`log:${t.logIndex}:out`, t.hash, t.time, symbol, key, amount.neg(), "transfer", t.to);
+    if (t.to.toLowerCase() === me) push(`log:${t.logIndex}:in`, t.hash, t.time, symbol, key, amount, "transfer", t.from);
   }
 
   classifyGroups(entries);

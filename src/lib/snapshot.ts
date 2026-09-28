@@ -1,5 +1,5 @@
 import Decimal from "@/lib/decimal";
-import { db, getSetting, type Holding, type Snapshot } from "@/lib/db";
+import { db, type Holding, type Snapshot } from "@/lib/db";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
 import { fetchOkxBalances } from "@/lib/sources/okx";
@@ -21,7 +21,6 @@ async function fetchPrices(symbols: string[]): Promise<PriceResponse> {
 
 export async function takeSnapshot(note?: string): Promise<Snapshot> {
   const sources = await db.sources.toArray();
-  const alchemyKey = await getSetting("alchemyKey");
 
   if (sources.some((s) => s.kind !== "evm") && !isUnlocked()) {
     throw new Error("거래소 키를 쓰려면 먼저 잠금을 해제하세요");
@@ -41,8 +40,7 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
         } else if (s.kind === "okx") {
           balances = await fetchOkxBalances(s);
         } else {
-          if (!alchemyKey) throw new Error("Alchemy API 키가 설정되지 않았습니다");
-          balances = await fetchEvmBalances(s, alchemyKey);
+          balances = await fetchEvmBalances(s);
         }
         collected.push(
           ...balances.map((b) => ({ ...b, sourceId: s.id, sourceLabel: s.label })),
