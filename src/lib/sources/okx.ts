@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 import type { OkxSource } from "@/lib/db";
 import type { RawBalance } from "@/lib/sources/types";
 import { decrypt } from "@/lib/vault";
@@ -68,7 +68,7 @@ export async function fetchOkxBalances(source: OkxSource): Promise<RawBalance[]>
   const push = (location: string, ccy: string, amount: string) => {
     const d = new Decimal(amount || 0);
     if (d.isZero()) return;
-    out.push({ location, asset: ccy, rawAsset: ccy, amount: d });
+    out.push({ location, asset: ccy, rawAsset: ccy, assetKey: ccy, amount: d });
   };
 
   // eq: 통화별 자산 가치 (현물 보유 + 파생상품 평가손익)

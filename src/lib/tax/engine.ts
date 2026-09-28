@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 import {
   BASIC_DEDUCTION_KRW,
   INCOME_TAX_RATE,

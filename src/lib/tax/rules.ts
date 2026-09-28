@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 
 // 가상자산 과세 규정 상수 (소득세법·지방세법).
 // 법령이 여러 차례 개정·유예되었으므로 시행 전에 반드시 최신 조문과 시행령으로 재확인할 것.

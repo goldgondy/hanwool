@@ -33,6 +33,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="text-stone-500 hover:text-foreground">
               스냅샷
             </Link>
+            <Link href="/ledger" className="text-stone-500 hover:text-foreground">
+              원장
+            </Link>
             <Link href="/sources" className="text-stone-500 hover:text-foreground">
               연결 계정
             </Link>

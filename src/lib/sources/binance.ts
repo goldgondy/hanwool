@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 import type { BinanceSource } from "@/lib/db";
 import type { RawBalance, Warn } from "@/lib/sources/types";
 import { decrypt } from "@/lib/vault";
@@ -126,7 +126,7 @@ export async function fetchBinanceBalances(
 
   const out: RawBalance[] = [];
   const push = (location: string, asset: string, amount: Decimal, rawAsset = asset) => {
-    if (!amount.isZero()) out.push({ location, asset, rawAsset, amount });
+    if (!amount.isZero()) out.push({ location, asset, rawAsset, assetKey: asset, amount });
   };
 
   // 유연 Earn 보유분이 현물 잔고에 LD접두 자산(LDBTC 등)으로도 나타날 수 있어 중복을 제거한다.

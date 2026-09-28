@@ -65,6 +65,34 @@ export interface Snapshot {
   note?: string;
 }
 
+// 원장: 계정별 자산 이동 한 건. 수량은 부호 있음 (+ 입금, - 출금).
+export type LedgerKind =
+  | "trade" // 같은 그룹에 들어오고 나가는 자산이 함께 있음 (스왑 등)
+  | "transfer" // 한 방향 이동 (입금 또는 출금). 본인 계정 간 이체인지는 매칭 단계에서 판단
+  | "fee" // 가스비, 거래 수수료
+  | "income" // 보상, 에어드랍 등 (분류 확정된 경우)
+  | "other";
+
+export interface LedgerEntry {
+  id: string; // 원본 데이터에서 결정적으로 생성 → 재동기화해도 중복되지 않음
+  sourceId: string;
+  location: string; // "Ethereum", "Binance" 등
+  time: number;
+  asset: string; // 표시용 심볼
+  assetKey: string; // 대사용 식별자 (RawBalance.assetKey와 같은 규칙)
+  amount: string; // Decimal 문자열, 부호 있음
+  kind: LedgerKind;
+  groupId: string; // 같은 트랜잭션/주문의 항목끼리 묶음
+  txHash?: string;
+  counterparty?: string; // 상대 주소
+}
+
+export interface SyncState {
+  key: string; // `${sourceId}:${scope}`
+  cursor: string; // 예: 마지막으로 가져온 블록 번호
+  syncedAt: number;
+}
+
 export interface Setting {
   key: string;
   value: string;
@@ -75,6 +103,8 @@ export const db = new Dexie("crypto-tax-engine") as Dexie & {
   sources: Table<Source, string>;
   snapshots: EntityTable<Snapshot, "id">;
   settings: EntityTable<Setting, "key">;
+  ledger: EntityTable<LedgerEntry, "id">;
+  syncState: EntityTable<SyncState, "key">;
 };
 
 db.version(1).stores({
@@ -96,6 +126,15 @@ db.version(2)
       .filter((s) => s.kind === "binance" && "apiSecret" in s)
       .delete(),
   );
+
+// v3: 원장
+db.version(3).stores({
+  sources: "id, kind, createdAt",
+  snapshots: "id, takenAt",
+  settings: "key",
+  ledger: "id, sourceId, time, groupId, [sourceId+assetKey]",
+  syncState: "key",
+});
 
 export async function getSetting(key: string): Promise<string | undefined> {
   return (await db.settings.get(key))?.value;

@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 import { describe, expect, it } from "vitest";
 import { runEngine, type TaxEvent } from "./engine";
 

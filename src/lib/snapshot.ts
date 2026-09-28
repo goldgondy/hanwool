@@ -1,4 +1,4 @@
-import Decimal from "decimal.js";
+import Decimal from "@/lib/decimal";
 import { db, getSetting, type Holding, type Snapshot } from "@/lib/db";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
