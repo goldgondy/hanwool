@@ -1,4 +1,5 @@
 import Decimal from "@/lib/decimal";
+import { STABLECOINS } from "@/lib/assets";
 import type { GroupView } from "@/lib/classify/classifier";
 import type { Category } from "@/lib/classify/types";
 import type { TaxEvent } from "./engine";
@@ -103,13 +104,31 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
         const outVals = outs.map(([p, q]) => valueOf(p, q));
         const inVals = ins.map(([p, q]) => valueOf(p, q));
         const sum = (vs: (Decimal | null)[]) => vs.reduce<Decimal>((s, v) => (v ? s.plus(v) : s), new Decimal(0));
-        // 한쪽 시세가 전혀 없으면 다른 쪽 총액을 나눠 쓴다 (교환이므로 양쪽 가치가 같다고 본다)
-        const fill = (vals: (Decimal | null)[], other: (Decimal | null)[]) =>
-          vals.every((v) => v === null) && other.length > 0 && other.every((v) => v !== null)
-            ? vals.map(() => sum(other).div(vals.length))
-            : vals;
-        const outFinal = fill(outVals, inVals);
-        const inFinal = fill(inVals, outVals);
+        // 총액을 각 항목의 시가 비율로 나눈다 (시가를 모르면 균등하게)
+        const allocate = (total: Decimal, own: (Decimal | null)[]) => {
+          const ownSum = sum(own);
+          return own.every((v) => v) && ownSum.gt(0)
+            ? own.map((v) => total.mul(v!).div(ownSum))
+            : own.map(() => total.div(own.length));
+        };
+        const priced = (vals: (Decimal | null)[]) => vals.length > 0 && vals.every((v) => v !== null);
+        const allStable = (legs: [string, Decimal][]) => legs.length > 0 && legs.every(([p]) => STABLECOINS.has(p));
+
+        let outFinal: (Decimal | null)[];
+        let inFinal: (Decimal | null)[];
+        if (allStable(outs) && priced(outVals) && !allStable(ins)) {
+          // 스테이블코인으로 산 경우: 실제로 지불한 금액이 취득가다
+          outFinal = outVals;
+          inFinal = allocate(sum(outVals), inVals);
+        } else if (allStable(ins) && priced(inVals) && !allStable(outs)) {
+          // 스테이블코인을 받고 판 경우: 실제로 받은 금액이 양도가다
+          inFinal = inVals;
+          outFinal = allocate(sum(inVals), outVals);
+        } else {
+          // 각자 시가. 한쪽 시세가 전혀 없으면 다른 쪽 총액을 나눠 쓴다 (교환이므로 양쪽 가치가 같다고 본다)
+          outFinal = outVals.every((v) => v === null) && priced(inVals) ? allocate(sum(inVals), outVals) : outVals;
+          inFinal = inVals.every((v) => v === null) && priced(outVals) ? allocate(sum(outVals), inVals) : inVals;
+        }
         outs.forEach(([p, q], i) => {
           if (!outFinal[i]) missingPrice(p);
           dispose(p, q, outFinal[i] ?? new Decimal(0));

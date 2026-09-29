@@ -16,6 +16,16 @@ await sql`
     primary key (src, symbol, hour)
   )`;
 
+// 1분 단위 시세 캐시 (prices_hourly와 같은 구조, minute = 캔들 시작 시각 UTC)
+await sql`
+  create table if not exists prices_minute (
+    src    text        not null,
+    symbol text        not null,
+    minute timestamptz not null,
+    price  numeric     not null,
+    primary key (src, symbol, minute)
+  )`;
+
 // ECB 원/달러 기준 환율 (영업일이 아닌 날은 직전 영업일 값으로 채움)
 await sql`
   create table if not exists fx_usdkrw_daily (

@@ -44,6 +44,27 @@ describe("buildTaxEvents", () => {
     ]);
   });
 
+  it("스테이블코인으로 산 경우 ETH 시세가 아니라 실제 지불한 금액이 취득가다", () => {
+    // ETH 시세로는 2,900,000원이지만 실제로 낸 것은 2,000 USDC = 2,800,000원
+    const r = buildTaxEvents([group("trade", [leg("USDC", "-2000"), leg("ETH", "0.5")])], prices({ USDC: "1400", ETH: "5800000" }));
+    expect(brief(r)).toEqual([
+      ["dispose", "USDC", "2000", "2800000"],
+      ["acquire", "ETH", "0.5", "2800000"],
+    ]);
+  });
+
+  it("스테이블코인을 받고 판 경우 실제 받은 금액이 양도가이고, 여러 코인이면 시가 비율로 나눈다", () => {
+    const r = buildTaxEvents(
+      [group("trade", [leg("ETH", "-1"), leg("ARB", "-1000"), leg("USDT", "6000")])],
+      prices({ ETH: "5000000", ARB: "1000", USDT: "1350" }), // 시가 비율 5,000,000 : 1,000,000
+    );
+    expect(brief(r)).toEqual([
+      ["dispose", "ETH", "1", "6750000"],
+      ["dispose", "ARB", "1000", "1350000"],
+      ["acquire", "USDT", "6000", "8100000"],
+    ]);
+  });
+
   it("교환에서 한쪽 시세가 없으면 다른 쪽 가치를 쓴다", () => {
     const r = buildTaxEvents([group("trade", [leg("USDC", "-2000"), leg("NEWTOKEN", "100")])], prices({ USDC: "1400" }));
     expect(brief(r)).toContainEqual(["acquire", "NEWTOKEN", "100", "2800000"]);

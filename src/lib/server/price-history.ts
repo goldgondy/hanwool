@@ -1,21 +1,20 @@
 import { neon } from "@neondatabase/serverless";
 import Decimal from "@/lib/decimal";
+import { PRICE_ALIASES, STABLECOINS } from "@/lib/assets";
 
-// 과거 원화 시세 (1시간 단위). 서버에서만 사용한다.
-// 조회 순서: Neon 캐시 → 업비트 KRW 1시간 캔들 → 바이낸스 USDT 1시간 캔들 × 원/달러
+// 과거 원화 시세. 서버에서만 사용한다.
+// 시각 t의 가격 = t 직전에 마감된 캔들의 종가 (거래 이후의 가격을 쓰지 않는다).
+// 조회 순서: 업비트 KRW 1분 → 업비트 KRW 1시간 → 바이낸스 USDT 1분 → 바이낸스 USDT 1시간 (× 원/달러)
 // 원/달러: 업비트 KRW-USDT(상장 이후) → ECB 기준 환율(frankfurter, 일 단위)
-// 시각 t의 가격 = t가 속한 1시간 캔들의 종가. 거래가 없던 시간은 직전 종가로 채운다.
+// 한 번 받은 캔들은 Neon에 캐시한다. 거래가 없던 구간은 직전 종가로 채워 저장한다.
 
+const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const WINDOW = 200; // 한 번에 받는 캔들 수 (업비트·바이낸스 최대치)
-const LEAD = 23; // 창 시작을 앞당겨 첫 시간에 거래가 없어도 직전 종가로 채울 수 있게 한다
-
-// 같은 가격으로 보는 자산
-const ALIASES: Record<string, string> = { WETH: "ETH", WBTC: "BTC", CBBTC: "BTC", WPOL: "POL", MATIC: "POL", WMATIC: "POL" };
-// 달러 스테이블코인: 업비트 시세가 없으면 1달러로 본다
-const STABLES = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE", "TUSD", "USDS", "PYUSD"]);
+const LEAD = 30; // 창 시작을 앞당겨 첫 캔들에 거래가 없어도 직전 종가로 채울 수 있게 한다
 
 type Src = "upbit_krw" | "binance_usdt";
+type Unit = typeof MINUTE | typeof HOUR;
 
 export interface PriceQuery {
   symbol: string;
@@ -27,9 +26,11 @@ export interface PriceResult {
 }
 
 const db = () => neon(process.env.DATABASE_URL!);
-const floorHour = (t: number) => Math.floor(t / HOUR) * HOUR;
 const iso = (t: number) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// t 직전에 마감된 캔들의 시작 시각
+const lastClosed = (t: number, unit: Unit) => Math.floor(t / unit) * unit - unit;
+const unitLabel = (unit: Unit) => (unit === MINUTE ? "1분" : "1시간");
 
 let upbitMarkets: { at: number; symbols: Set<string> } | null = null;
 async function upbitListed(): Promise<Set<string>> {
@@ -41,11 +42,12 @@ async function upbitListed(): Promise<Set<string>> {
   return symbols;
 }
 
-// 창 하나(start부터 WINDOW시간)의 캔들 종가. 마켓이 없으면 null.
-async function fetchWindow(src: Src, symbol: string, start: number): Promise<Map<number, Decimal> | null> {
+// 창 하나(start부터 WINDOW개)의 캔들 종가. 마켓이 없으면 null.
+async function fetchWindow(src: Src, symbol: string, unit: Unit, start: number): Promise<Map<number, Decimal> | null> {
   const out = new Map<number, Decimal>();
   if (src === "upbit_krw") {
-    const url = `https://api.upbit.com/v1/candles/minutes/60?market=KRW-${symbol}&to=${iso(start + WINDOW * HOUR)}&count=${WINDOW}`;
+    const path = unit === MINUTE ? "minutes/1" : "minutes/60";
+    const url = `https://api.upbit.com/v1/candles/${path}?market=KRW-${symbol}&to=${iso(start + WINDOW * unit)}&count=${WINDOW}`;
     const res = await fetch(url, { cache: "no-store" });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`업비트 시세 조회 실패 (HTTP ${res.status})`);
@@ -54,7 +56,8 @@ async function fetchWindow(src: Src, symbol: string, start: number): Promise<Map
     }
     await sleep(120); // 업비트 캔들 API: 초당 10회 제한
   } else {
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&startTime=${start}&limit=${WINDOW}`;
+    const interval = unit === MINUTE ? "1m" : "1h";
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=${interval}&startTime=${start}&limit=${WINDOW}`;
     const res = await fetch(url, { cache: "no-store" });
     if (res.status === 400) return null; // 없는 심볼
     if (!res.ok) throw new Error(`바이낸스 시세 조회 실패 (HTTP ${res.status})`);
@@ -63,42 +66,59 @@ async function fetchWindow(src: Src, symbol: string, start: number): Promise<Map
   return out;
 }
 
-// src·symbol의 여러 시각 가격. 캐시에 없으면 창 단위로 받아 빈 시간을 채운 뒤 저장한다.
-async function resolveHours(src: Src, symbol: string, hours: number[]): Promise<Map<number, Decimal>> {
+async function loadCached(src: Src, symbol: string, unit: Unit, keys: number[]) {
   const sql = db();
-  const result = new Map<number, Decimal>();
-  const unique = [...new Set(hours)].sort((a, b) => a - b);
-  if (unique.length === 0) return result;
+  const stamps = keys.map(iso);
+  const rows = (
+    unit === MINUTE
+      ? await sql`select minute as t, price from prices_minute where src = ${src} and symbol = ${symbol} and minute = any(${stamps}::timestamptz[])`
+      : await sql`select hour as t, price from prices_hourly where src = ${src} and symbol = ${symbol} and hour = any(${stamps}::timestamptz[])`
+  ) as { t: string | Date; price: string }[];
+  return new Map(rows.map((r) => [new Date(r.t).getTime(), new Decimal(r.price)]));
+}
 
-  const rows = (await sql`
-    select hour, price from prices_hourly
-    where src = ${src} and symbol = ${symbol} and hour = any(${unique.map(iso)}::timestamptz[])`) as { hour: string | Date; price: string }[];
-  for (const r of rows) result.set(new Date(r.hour).getTime(), new Decimal(r.price));
+async function saveCached(src: Src, symbol: string, unit: Unit, rows: [number, Decimal][]) {
+  if (rows.length === 0) return;
+  const sql = db();
+  const stamps = rows.map(([t]) => iso(t));
+  const prices = rows.map(([, p]) => p.toString());
+  if (unit === MINUTE) {
+    await sql`
+      insert into prices_minute (src, symbol, minute, price)
+      select ${src}, ${symbol}, t, p from unnest(${stamps}::timestamptz[], ${prices}::numeric[]) as x(t, p)
+      on conflict do nothing`;
+  } else {
+    await sql`
+      insert into prices_hourly (src, symbol, hour, price)
+      select ${src}, ${symbol}, t, p from unnest(${stamps}::timestamptz[], ${prices}::numeric[]) as x(t, p)
+      on conflict do nothing`;
+  }
+}
 
-  const nowHour = floorHour(Date.now());
-  let missing = unique.filter((h) => !result.has(h) && h <= nowHour);
+// 여러 캔들 시작 시각의 종가. 캐시에 없으면 창 단위로 받아 빈 캔들을 채운 뒤 저장한다.
+async function resolveCandles(src: Src, symbol: string, unit: Unit, keys: number[]): Promise<Map<number, Decimal>> {
+  const unique = [...new Set(keys)].sort((a, b) => a - b);
+  if (unique.length === 0) return new Map();
+  const result = await loadCached(src, symbol, unit, unique);
+
+  const lastDone = lastClosed(Date.now(), unit);
+  let missing = unique.filter((k) => !result.has(k) && k <= lastDone);
   while (missing.length > 0) {
-    const start = missing[0] - LEAD * HOUR;
-    const end = start + (WINDOW - 1) * HOUR;
-    const candles = await fetchWindow(src, symbol, start);
+    const start = missing[0] - LEAD * unit;
+    const end = start + (WINDOW - 1) * unit;
+    const candles = await fetchWindow(src, symbol, unit, start);
     if (!candles) break; // 마켓 없음
 
-    // 창 안의 모든 시간을 직전 종가로 채운다 (첫 캔들 이전 시간은 비워 둔다)
+    // 창 안의 모든 캔들을 직전 종가로 채운다 (첫 캔들 이전은 비워 둔다)
     const filled: [number, Decimal][] = [];
     let last: Decimal | null = null;
-    for (let h = start; h <= Math.min(end, nowHour); h += HOUR) {
-      last = candles.get(h) ?? last;
-      if (last) filled.push([h, last]);
+    for (let k = start; k <= Math.min(end, lastDone); k += unit) {
+      last = candles.get(k) ?? last;
+      if (last) filled.push([k, last]);
     }
-    if (filled.length > 0) {
-      await sql`
-        insert into prices_hourly (src, symbol, hour, price)
-        select ${src}, ${symbol}, h, p
-        from unnest(${filled.map(([h]) => iso(h))}::timestamptz[], ${filled.map(([, p]) => p.toString())}::numeric[]) as t(h, p)
-        on conflict do nothing`;
-    }
-    for (const [h, p] of filled) if (!result.has(h)) result.set(h, p);
-    missing = missing.filter((h) => h > end);
+    await saveCached(src, symbol, unit, filled);
+    for (const [k, p] of filled) if (!result.has(k)) result.set(k, p);
+    missing = missing.filter((k) => k > end);
   }
   return result;
 }
@@ -142,31 +162,45 @@ async function resolveFx(days: string[]): Promise<Map<string, Decimal>> {
   return result;
 }
 
+// 한 출처에서 시각별 가격을 찾는다. 1분 캔들 → 없으면 1시간 캔들.
+async function priceFrom(src: Src, symbol: string, times: number[]): Promise<Map<number, { price: Decimal; unit: Unit }>> {
+  const out = new Map<number, { price: Decimal; unit: Unit }>();
+  for (const unit of [MINUTE, HOUR] as Unit[]) {
+    const pending = times.filter((t) => !out.has(t));
+    if (pending.length === 0) break;
+    const candles = await resolveCandles(src, symbol, unit, pending.map((t) => lastClosed(t, unit)));
+    for (const t of pending) {
+      const p = candles.get(lastClosed(t, unit));
+      if (p) out.set(t, { price: p, unit });
+    }
+  }
+  return out;
+}
+
 // 시각별 원/달러: 업비트 KRW-USDT가 있으면 그것을, 없으면 ECB 환율을 쓴다.
-async function usdKrw(hours: number[]): Promise<Map<number, { rate: Decimal; via: string }>> {
+async function usdKrw(times: number[]): Promise<Map<number, { rate: Decimal; via: string }>> {
   const out = new Map<number, { rate: Decimal; via: string }>();
-  const upbit = (await upbitListed()).has("USDT") ? await resolveHours("upbit_krw", "USDT", hours) : new Map();
-  const needFx = hours.filter((h) => !upbit.has(h));
-  const fx = await resolveFx(needFx.map((h) => iso(h).slice(0, 10)));
-  for (const h of hours) {
-    const u = upbit.get(h);
-    if (u) out.set(h, { rate: u, via: "업비트 USDT" });
+  const upbit = (await upbitListed()).has("USDT") ? await priceFrom("upbit_krw", "USDT", times) : new Map();
+  const fx = await resolveFx(times.filter((t) => !upbit.has(t)).map((t) => iso(t).slice(0, 10)));
+  for (const t of times) {
+    const u = upbit.get(t);
+    if (u) out.set(t, { rate: u.price, via: `업비트 USDT ${unitLabel(u.unit)}` });
     else {
-      const f = fx.get(iso(h).slice(0, 10));
-      if (f) out.set(h, { rate: f, via: "ECB 환율" });
+      const f = fx.get(iso(t).slice(0, 10));
+      if (f) out.set(t, { rate: f, via: "ECB 환율" });
     }
   }
   return out;
 }
 
 export async function pricesAt(queries: PriceQuery[]): Promise<PriceResult[]> {
-  const nowHour = floorHour(Date.now());
+  const now = Date.now();
   const norm = queries.map((q) => {
     const s = q.symbol.toUpperCase();
-    return { symbol: ALIASES[s] ?? s, hour: floorHour(q.time) };
+    return { symbol: PRICE_ALIASES[s] ?? s, time: q.time };
   });
   const results: PriceResult[] = queries.map(() => ({ krw: null, via: null }));
-  const pending = (i: number) => results[i].krw === null && norm[i].hour <= nowHour;
+  const pending = (i: number) => results[i].krw === null && norm[i].time <= now;
 
   const bySymbol = (idx: number[]) => {
     const m = new Map<string, number[]>();
@@ -174,33 +208,32 @@ export async function pricesAt(queries: PriceQuery[]): Promise<PriceResult[]> {
     return m;
   };
 
-  // 1) 업비트 원화 캔들
+  // 1) 업비트 원화
   const listed = await upbitListed();
   for (const [symbol, idx] of bySymbol(norm.map((_, i) => i).filter((i) => pending(i) && listed.has(norm[i].symbol)))) {
-    const prices = await resolveHours("upbit_krw", symbol, idx.map((i) => norm[i].hour));
+    const prices = await priceFrom("upbit_krw", symbol, idx.map((i) => norm[i].time));
     for (const i of idx) {
-      const p = prices.get(norm[i].hour);
-      if (p) results[i] = { krw: p.toString(), via: `업비트 KRW-${symbol}` };
+      const p = prices.get(norm[i].time);
+      if (p) results[i] = { krw: p.price.toString(), via: `업비트 KRW-${symbol} ${unitLabel(p.unit)}` };
     }
   }
 
-  // 2) 바이낸스 USDT 캔들 × 원/달러, 스테이블코인은 1달러 × 원/달러
-  const rest = norm.map((_, i) => i).filter(pending);
+  // 2) 바이낸스 USDT × 원/달러, 스테이블코인은 1달러 × 원/달러
   const usd = new Map<number, { price: Decimal; via: string }>();
-  for (const [symbol, idx] of bySymbol(rest)) {
-    if (STABLES.has(symbol)) {
+  for (const [symbol, idx] of bySymbol(norm.map((_, i) => i).filter(pending))) {
+    if (STABLECOINS.has(symbol)) {
       for (const i of idx) usd.set(i, { price: new Decimal(1), via: `${symbol}=1달러` });
       continue;
     }
-    const prices = await resolveHours("binance_usdt", symbol, idx.map((i) => norm[i].hour));
+    const prices = await priceFrom("binance_usdt", symbol, idx.map((i) => norm[i].time));
     for (const i of idx) {
-      const p = prices.get(norm[i].hour);
-      if (p) usd.set(i, { price: p, via: `바이낸스 ${symbol}USDT` });
+      const p = prices.get(norm[i].time);
+      if (p) usd.set(i, { price: p.price, via: `바이낸스 ${symbol}USDT ${unitLabel(p.unit)}` });
     }
   }
-  const rates = await usdKrw([...usd.keys()].map((i) => norm[i].hour));
+  const rates = await usdKrw([...new Set([...usd.keys()].map((i) => norm[i].time))]);
   for (const [i, u] of usd) {
-    const r = rates.get(norm[i].hour);
+    const r = rates.get(norm[i].time);
     if (r) results[i] = { krw: u.price.mul(r.rate).toString(), via: `${u.via} × ${r.via}` };
   }
 
