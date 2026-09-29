@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable, type Table } from "dexie";
+import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
@@ -116,6 +117,7 @@ export const db = new Dexie("crypto-tax-engine") as Dexie & {
   settings: EntityTable<Setting, "key">;
   ledger: EntityTable<LedgerEntry, "id">;
   syncState: EntityTable<SyncState, "key">;
+  decisions: EntityTable<Decision, "key">;
 };
 
 db.version(1).stores({
@@ -161,6 +163,16 @@ db.version(4)
     await tx.table("syncState").clear();
     await tx.table("settings").delete("alchemyKey");
   });
+
+// v5: 사용자 분류 결정 (docs/classification.md §7). 원장과 따로 저장해 재동기화해도 유지된다.
+db.version(5).stores({
+  sources: "id, kind, createdAt",
+  snapshots: "id, takenAt",
+  settings: "key",
+  ledger: "id, sourceId, time, groupId, [sourceId+assetKey]",
+  syncState: "key",
+  decisions: "key",
+});
 
 export async function getSetting(key: string): Promise<string | undefined> {
   return (await db.settings.get(key))?.value;

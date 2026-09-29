@@ -49,9 +49,15 @@ export async function syncBtcHistory(
   });
 
   // 주소 탐색 결과가 바뀌면 과거 트랜잭션 해석도 바뀔 수 있어 계정 원장을 통째로 다시 쓴다.
-  await db.transaction("rw", db.ledger, async () => {
+  // 찾은 주소 목록은 다른 계정과의 이체를 판단(분류 규칙 R5)하도록 함께 저장한다.
+  await db.transaction("rw", db.ledger, db.syncState, async () => {
     await db.ledger.where("sourceId").equals(source.id).delete();
     await db.ledger.bulkPut(entries);
+    await db.syncState.put({
+      key: `${source.id}:addresses`,
+      cursor: JSON.stringify(used.map((u) => u.address)),
+      syncedAt: Date.now(),
+    });
   });
 
   return { added: entries.length, addressCount: used.length, warnings };
