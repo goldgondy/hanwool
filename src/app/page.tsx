@@ -43,7 +43,7 @@ export default function Home() {
 
   const unlocked = useVaultUnlocked();
   const noSources = sources !== undefined && sources.length === 0;
-  const hasExchange = sources?.some((s) => s.kind !== "evm") ?? false;
+  const hasExchange = sources?.some((s) => s.kind === "binance" || s.kind === "okx") ?? false;
   const needsUnlock = hasExchange && !unlocked;
 
   return (

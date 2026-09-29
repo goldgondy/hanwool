@@ -1,5 +1,6 @@
 import Decimal from "@/lib/decimal";
 import { db, type Holding, type Snapshot } from "@/lib/db";
+import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
 import { fetchOkxBalances } from "@/lib/sources/okx";
@@ -22,7 +23,7 @@ async function fetchPrices(symbols: string[]): Promise<PriceResponse> {
 export async function takeSnapshot(note?: string): Promise<Snapshot> {
   const sources = await db.sources.toArray();
 
-  if (sources.some((s) => s.kind !== "evm") && !isUnlocked()) {
+  if (sources.some((s) => s.kind === "binance" || s.kind === "okx") && !isUnlocked()) {
     throw new Error("거래소 키를 쓰려면 먼저 잠금을 해제하세요");
   }
 
@@ -39,6 +40,8 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           );
         } else if (s.kind === "okx") {
           balances = await fetchOkxBalances(s);
+        } else if (s.kind === "btc") {
+          balances = await fetchBtcBalances(s);
         } else {
           balances = await fetchEvmBalances(s);
         }

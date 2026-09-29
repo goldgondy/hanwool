@@ -2,7 +2,7 @@ import Dexie, { type EntityTable, type Table } from "dexie";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "evm";
+export type SourceKind = "binance" | "okx" | "evm" | "btc";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -38,7 +38,18 @@ export interface EvmSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | EvmSource;
+export interface BtcSource {
+  id: string;
+  kind: "btc";
+  label: string;
+  input: string; // 주소, xpub/ypub/zpub, 또는 디스크립터 (lib/btc/descriptor.ts)
+  scriptType?: "p2pkh" | "p2sh-p2wpkh" | "p2wpkh" | "p2tr"; // xpub만 입력한 경우 사용자가 고른 주소 형식
+  gapLimit: number;
+  esploraUrl: string; // mempool.space 또는 개인 노드
+  createdAt: number;
+}
+
+export type Source = BinanceSource | OkxSource | EvmSource | BtcSource;
 export type ExchangeSource = BinanceSource | OkxSource;
 
 export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon";

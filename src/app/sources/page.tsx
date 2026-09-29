@@ -4,12 +4,14 @@ import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type EvmChain } from "@/lib/db";
 import { EVM_CHAINS } from "@/lib/sources/evm";
+import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
+import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
+import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
 import { encrypt } from "@/lib/vault";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
 
 const input =
-  "w-full rounded-lg border border-stone-300 bg-transparent px-3 py-2 text-sm dark:border-stone-700";
-const button =
+  "w-full rounded-lg border border-stone-300 bg-transparent px-3 py-2 text-sm dark:border-stone-700";const button =
   "rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900";
 const card =
   "space-y-3 rounded-xl border border-stone-200 p-5 dark:border-stone-800";
@@ -100,7 +102,104 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", evm: "EVM" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", evm: "EVM", btc: "Bitcoin" } as const;
+
+function preview(input: string, scriptType: ScriptType | "") {
+  if (!input.trim()) return null;
+  try {
+    const w = parseWalletInput(input, scriptType || undefined);
+    if (w.kind === "address") return { ok: true as const, text: "단일 주소", isXpub: false };
+    const isXpub = /^xpub/.test(input.trim());
+    return {
+      ok: true as const,
+      text: `${SCRIPT_LABEL[w.scriptType]} · 첫 받는 주소 ${deriveAddress(w, 0, 0)}`,
+      isXpub,
+    };
+  } catch (e) {
+    return { ok: false as const, text: e instanceof Error ? e.message : String(e), isXpub: false };
+  }
+}
+
+function BtcForm() {
+  const [label, setLabel] = useState("비트코인 지갑");
+  const [walletInput, setWalletInput] = useState("");
+  const [scriptType, setScriptType] = useState<ScriptType | "">("");
+  const [esploraUrl, setEsploraUrl] = useState(DEFAULT_ESPLORA);
+  const [advanced, setAdvanced] = useState(false);
+  const p = preview(walletInput, scriptType);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!p?.ok) return;
+    await db.sources.add({
+      id: crypto.randomUUID(),
+      kind: "btc",
+      label: label.trim() || "비트코인 지갑",
+      input: walletInput.trim(),
+      scriptType: scriptType || undefined,
+      gapLimit: DEFAULT_GAP_LIMIT,
+      esploraUrl: esploraUrl.trim() || DEFAULT_ESPLORA,
+      createdAt: Date.now(),
+    });
+    setWalletInput("");
+    setScriptType("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">비트코인 지갑</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        확장 공개키(<b>zpub·ypub·xpub</b>), 디스크립터, 또는 주소 하나를 입력하세요. Sparrow는 지갑의{" "}
+        <i>Settings</i> 탭 → Keystore의 <i>xPub</i> 값을 복사하면 됩니다.
+        공개키로는 조회만 가능합니다. <b>복구 문구(시드)나 개인키(xprv)는 절대 입력하지 마세요.</b>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
+      <textarea
+        className={`${input} font-mono text-xs`}
+        rows={3}
+        value={walletInput}
+        onChange={(e) => setWalletInput(e.target.value)}
+        placeholder="zpub6r… / wpkh([…]xpub…/<0;1>/*) / bc1q…"
+        required
+      />
+      {p && (
+        <p className={`break-all text-xs ${p.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>
+          {p.text}
+        </p>
+      )}
+      {p?.ok && p.isXpub && (
+        <label className="flex flex-wrap items-center gap-2 text-xs">
+          주소 형식
+          <select className={`${input} w-auto`} value={scriptType} onChange={(e) => setScriptType(e.target.value as ScriptType | "")}>
+            <option value="">Legacy (1…) — xpub 기본값</option>
+            {(Object.keys(SCRIPT_LABEL) as ScriptType[]).map((s) => (
+              <option key={s} value={s}>
+                {SCRIPT_LABEL[s]}
+              </option>
+            ))}
+          </select>
+          <span className="text-stone-500">첫 받는 주소가 지갑 앱과 같은지 확인하세요.</span>
+        </label>
+      )}
+      <button type="button" className="block text-xs text-stone-500 underline" onClick={() => setAdvanced(!advanced)}>
+        조회 서버 설정
+      </button>
+      {advanced && (
+        <div className="space-y-1">
+          <input className={input} value={esploraUrl} onChange={(e) => setEsploraUrl(e.target.value)} placeholder={DEFAULT_ESPLORA} />
+          <p className="text-xs leading-5 text-stone-500">
+            기본값은 mempool.space 공개 서버입니다. 조회한 주소들이 한 지갑이라는 사실이 서버에 드러나므로,
+            개인 노드(Umbrel·Start9의 mempool 등)가 있다면 그 주소(예: http://umbrel.local:3006/api)를
+            입력하세요.
+          </p>
+        </div>
+      )}
+      <button className={button} disabled={!p?.ok}>
+        추가
+      </button>
+    </form>
+  );
+}
 
 function EvmForm() {
   const [label, setLabel] = useState("내 지갑");
@@ -184,11 +283,13 @@ export default function SourcesPage() {
               </span>
               <span className="font-medium">{s.label}</span>
               <code className="text-xs text-stone-500">
-                {s.kind !== "evm"
-                  ? mask(s.apiKey)
-                  : `${s.address.slice(0, 6)}…${s.address.slice(-4)} · ${s.chains
+                {s.kind === "evm"
+                  ? `${s.address.slice(0, 6)}…${s.address.slice(-4)} · ${s.chains
                       .map((c) => EVM_CHAINS[c].name)
-                      .join(", ")}`}
+                      .join(", ")}`
+                  : s.kind === "btc"
+                    ? `${mask(s.input)} · ${new URL(s.esploraUrl).host}`
+                    : mask(s.apiKey)}
               </code>
               <button
                 onClick={() => removeSource(s.id)}
@@ -202,9 +303,10 @@ export default function SourcesPage() {
       </section>
 
       <div className="grid gap-6 md:grid-cols-2">
+        <BtcForm />
+        <EvmForm />
         <BinanceForm />
         <OkxForm />
-        <EvmForm />
       </div>
     </div>
   );

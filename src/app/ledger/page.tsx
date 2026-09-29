@@ -2,11 +2,44 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
+import { db, type BtcSource, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
 import { formatAmount, formatDateTime } from "@/lib/format";
-import { syncEvmHistory, type ChainSyncResult } from "@/lib/ledger/evm-sync";
+import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
+import { syncEvmHistory } from "@/lib/ledger/evm-sync";
 import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
+import type { RawBalance } from "@/lib/sources/types";
+
+type LedgerSource = EvmSource | BtcSource;
+
+// 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
+interface SyncLine {
+  title: string;
+  summary: string;
+  alert?: string;
+  notes: string[];
+}
+
+async function syncSource(source: LedgerSource, onProgress: (msg: string) => void): Promise<SyncLine[]> {
+  if (source.kind === "btc") {
+    const r = await syncBtcHistory(source, onProgress);
+    return [{ title: "Bitcoin", summary: `사용된 주소 ${r.addressCount}개, 항목 ${r.added}건 반영`, notes: r.warnings }];
+  }
+  const results = await syncEvmHistory(source, onProgress);
+  return results.map((r) => {
+    const gap = r.sentTxCount === null ? 0 : r.sentTxCount - r.gasRecordedCount;
+    return {
+      title: EVM_CHAINS[r.chain].name,
+      summary: `항목 ${r.added}건 반영`,
+      alert: gap > 0 ? `보낸 트랜잭션 ${r.sentTxCount}건 중 ${gap}건의 가스비가 원장에 없습니다` : undefined,
+      notes: r.warnings,
+    };
+  });
+}
+
+function fetchBalances(source: LedgerSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
+  return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
+}
 
 const KIND_LABEL: Record<LedgerEntry["kind"], string> = {
   trade: "스왑",
@@ -24,8 +57,11 @@ function short(addr?: string) {
 }
 
 function txUrl(e: LedgerEntry) {
-  const chain = e.groupId.split(":")[0] as EvmChain;
-  return e.txHash && EVM_CHAINS[chain] ? `${EVM_CHAINS[chain].explorer}/tx/${e.txHash}` : undefined;
+  const chain = e.groupId.split(":")[0];
+  if (!e.txHash) return undefined;
+  if (chain === "btc") return `https://mempool.space/tx/${e.txHash}`;
+  const evm = EVM_CHAINS[chain as EvmChain];
+  return evm ? `${evm.explorer}/tx/${e.txHash}` : undefined;
 }
 
 function ReconcileTable({
@@ -91,11 +127,11 @@ function ReconcileTable({
   );
 }
 
-function EvmLedger({ source }: { source: EvmSource }) {
+function SourceLedger({ source }: { source: LedgerSource }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<ChainSyncResult[] | null>(null);
+  const [results, setResults] = useState<SyncLine[] | null>(null);
   const [rows, setRows] = useState<ReconcileRow[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -109,9 +145,9 @@ function EvmLedger({ source }: { source: EvmSource }) {
     setBusy(true);
     setError(null);
     try {
-      if (withSync) setResults(await syncEvmHistory(source, setProgress));
+      if (withSync) setResults(await syncSource(source, setProgress));
       setProgress("실제 잔고 조회 중");
-      const balances = await fetchEvmBalances(source);
+      const balances = await fetchBalances(source, setProgress);
       const all = await db.ledger.where("sourceId").equals(source.id).toArray();
       setRows(reconcile(all, balances));
     } catch (e) {
@@ -141,25 +177,17 @@ function EvmLedger({ source }: { source: EvmSource }) {
 
       {results && (
         <ul className="space-y-1 text-sm">
-          {results.map((r) => {
-            const gap = r.sentTxCount === null ? 0 : r.sentTxCount - r.gasRecordedCount;
-            return (
-              <li key={r.chain}>
-                <b>{EVM_CHAINS[r.chain].name}</b>: 항목 {r.added}건 반영
-                {gap > 0 && (
-                  <span className="text-amber-700 dark:text-amber-400">
-                    {" "}
-                    · 보낸 트랜잭션 {r.sentTxCount}건 중 {gap}건의 가스비가 원장에 없습니다
-                  </span>
-                )}
-                {r.warnings.map((w, i) => (
-                  <span key={i} className="block text-xs text-amber-700 dark:text-amber-400">
-                    {w}
-                  </span>
-                ))}
-              </li>
-            );
-          })}
+          {results.map((r) => (
+            <li key={r.title}>
+              <b>{r.title}</b>: {r.summary}
+              {r.alert && <span className="text-amber-700 dark:text-amber-400"> · {r.alert}</span>}
+              {r.notes.map((w, i) => (
+                <span key={i} className="block text-xs text-amber-700 dark:text-amber-400">
+                  {w}
+                </span>
+              ))}
+            </li>
+          ))}
         </ul>
       )}
 
@@ -220,27 +248,27 @@ function EvmLedger({ source }: { source: EvmSource }) {
 
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
-  const evm = (sources ?? []).filter((s): s is EvmSource => s.kind === "evm");
+  const wallets = (sources ?? []).filter((s): s is LedgerSource => s.kind === "evm" || s.kind === "btc");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const active = evm.find((s) => s.id === activeId) ?? evm[0];
+  const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold">원장</h2>
         <p className="text-sm text-stone-500">
-          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 현재는 EVM 지갑을 지원하며, 거래소는 준비
-          중입니다.
+          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 현재는 비트코인·EVM 지갑을 지원하며,
+          거래소는 준비 중입니다.
         </p>
       </div>
 
-      {sources && evm.length === 0 && (
-        <p className="text-sm text-stone-500">연결 계정에서 EVM 지갑을 먼저 추가하세요.</p>
+      {sources && wallets.length === 0 && (
+        <p className="text-sm text-stone-500">연결 계정에서 비트코인 또는 EVM 지갑을 먼저 추가하세요.</p>
       )}
 
-      {evm.length > 1 && (
+      {wallets.length > 1 && (
         <div className="flex flex-wrap gap-2">
-          {evm.map((s) => (
+          {wallets.map((s) => (
             <button
               key={s.id}
               onClick={() => setActiveId(s.id)}
@@ -250,13 +278,13 @@ export default function LedgerPage() {
                   : "border-stone-300 dark:border-stone-700"
               }`}
             >
-              {s.label} {short(s.address)}
+              {s.label} {s.kind === "evm" ? short(s.address) : "₿"}
             </button>
           ))}
         </div>
       )}
 
-      {active && <EvmLedger key={active.id} source={active} />}
+      {active && <SourceLedger key={active.id} source={active} />}
     </div>
   );
 }
