@@ -23,7 +23,8 @@ function kakaoProvider() {
   return {
     ...base,
     disableDefaultScope: true,
-    scope: (process.env.KAKAO_SCOPES ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    // 항목 이름 형식(소문자·밑줄, 예: account_email)만 받는다. 키 값 등을 잘못 넣어도 무시된다.
+    scope: (process.env.KAKAO_SCOPES ?? "").split(",").map((s) => s.trim()).filter((s) => /^[a-z_]+$/.test(s)),
     mapProfileToUser: (profile: { id: number | string; kakao_account?: { email?: string } }) =>
       profile.kakao_account?.email ? {} : { email: `kakao-${profile.id}@no-email.invalid`, emailVerified: false },
   };
