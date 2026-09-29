@@ -25,14 +25,23 @@ function LockedHint({ unlocked }: { unlocked: boolean }) {
   return <p className="text-xs text-amber-700 dark:text-amber-400">위에서 잠금을 해제해야 추가할 수 있습니다.</p>;
 }
 
+// 같은 거래소 API 키를 두 번 등록하면 잔고가 이중으로 잡힌다.
+async function exchangeKeyExists(kind: "binance" | "okx", apiKey: string) {
+  return (await db.sources.toArray()).some((s) => s.kind === kind && s.apiKey === apiKey.trim());
+}
+
 function BinanceForm() {
   const unlocked = useVaultUnlocked();
   const [label, setLabel] = useState("Binance");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  const [dup, setDup] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const exists = await exchangeKeyExists("binance", apiKey);
+    setDup(exists);
+    if (exists) return;
     await db.sources.add({
       id: crypto.randomUUID(),
       kind: "binance",
@@ -56,6 +65,7 @@ function BinanceForm() {
       <input className={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key" required />
       <input className={input} type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} placeholder="Secret Key" required />
       <LockedHint unlocked={unlocked} />
+      {dup && <p className="text-xs text-red-600">이미 등록된 API 키입니다.</p>}
       <button className={button} disabled={!unlocked}>추가</button>
     </form>
   );
@@ -67,9 +77,13 @@ function OkxForm() {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [dup, setDup] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const exists = await exchangeKeyExists("okx", apiKey);
+    setDup(exists);
+    if (exists) return;
     await db.sources.add({
       id: crypto.randomUUID(),
       kind: "okx",
@@ -97,6 +111,7 @@ function OkxForm() {
       <input className={input} type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} placeholder="Secret Key" required />
       <input className={input} type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Passphrase" required />
       <LockedHint unlocked={unlocked} />
+      {dup && <p className="text-xs text-red-600">이미 등록된 API 키입니다.</p>}
       <button className={button} disabled={!unlocked}>추가</button>
     </form>
   );
@@ -128,9 +143,17 @@ function BtcForm() {
   const [advanced, setAdvanced] = useState(false);
   const p = preview(walletInput, scriptType);
 
+  const [dupError, setDupError] = useState<string | null>(null);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!p?.ok) return;
+    const dup = await findDuplicateBtc(walletInput, scriptType);
+    if (dup) {
+      setDupError(dup);
+      return;
+    }
+    setDupError(null);
     await db.sources.add({
       id: crypto.randomUUID(),
       kind: "btc",
@@ -194,11 +217,32 @@ function BtcForm() {
           </p>
         </div>
       )}
+      {dupError && <p className="text-xs text-red-600">{dupError}</p>}
       <button className={button} disabled={!p?.ok}>
         추가
       </button>
     </form>
   );
+}
+
+// 같은 지갑을 두 번 연결하면 잔고와 거래가 이중으로 잡히므로 막는다.
+// 입력 형식이 달라도(zpub ↔ 디스크립터) 첫 받는 주소가 같으면 같은 지갑이다.
+async function findDuplicateBtc(raw: string, scriptType: ScriptType | ""): Promise<string | null> {
+  const fingerprint = (input: string, st?: string) => {
+    const w = parseWalletInput(input, (st || undefined) as ScriptType | undefined);
+    return w.kind === "address" ? w.address : deriveAddress(w, 0, 0);
+  };
+  const mine = fingerprint(raw, scriptType);
+  const existing = (await db.sources.toArray()).filter((s) => s.kind === "btc");
+  for (const s of existing) {
+    if (fingerprint(s.input, s.scriptType) === mine) return `이미 연결된 지갑입니다 (${s.label}).`;
+    // 단일 주소가 이미 연결된 HD 지갑에 속하는지 (동기화한 적이 있는 지갑만 확인 가능)
+    const saved = await db.syncState.get(`${s.id}:addresses`);
+    if (saved && (JSON.parse(saved.cursor) as string[]).includes(mine)) {
+      return `이 주소는 이미 연결된 지갑(${s.label})에 포함되어 있습니다.`;
+    }
+  }
+  return null;
 }
 
 function EvmForm() {
@@ -207,9 +251,27 @@ function EvmForm() {
   const [chains, setChains] = useState<EvmChain[]>(["eth", "arb", "base"]);
   const valid = /^0x[0-9a-fA-F]{40}$/.test(address.trim());
 
+  const [notice, setNotice] = useState<string | null>(null);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!valid || chains.length === 0) return;
+    // 같은 주소가 이미 있으면 새 계정을 만들지 않고 체인만 합친다 (이중 집계 방지).
+    const existing = (await db.sources.toArray()).find(
+      (s) => s.kind === "evm" && s.address.toLowerCase() === address.trim().toLowerCase(),
+    );
+    if (existing && existing.kind === "evm") {
+      const added = chains.filter((c) => !existing.chains.includes(c));
+      if (added.length > 0) await db.sources.put({ ...existing, chains: [...existing.chains, ...added] });
+      setNotice(
+        added.length > 0
+          ? `이미 연결된 주소라 기존 계정(${existing.label})에 ${added.map((c) => EVM_CHAINS[c].name).join(", ")}를 추가했습니다.`
+          : `이미 연결된 주소입니다 (${existing.label}).`,
+      );
+      setAddress("");
+      return;
+    }
+    setNotice(null);
     await db.sources.add({
       id: crypto.randomUUID(),
       kind: "evm",
@@ -244,6 +306,7 @@ function EvmForm() {
           </label>
         ))}
       </div>
+      {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
       <button className={button} disabled={!valid || chains.length === 0}>
         추가
       </button>
