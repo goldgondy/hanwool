@@ -14,16 +14,25 @@ try {
   const off = tables.filter((t) => !t.rls && !t.name.startsWith("__drizzle"));
   console.log(off.length ? `\n⚠ RLS 꺼진 테이블: ${off.map((t) => t.name).join(", ")}` : "\n모든 서비스 테이블 RLS 켜짐");
 
-  const [{ id }] = await sql`insert into audit_log (action, detail) values ('test.append_only_check', '{"note":"보안 설정 확인용"}') returning id`;
-  for (const [label, q] of [
-    ["UPDATE", sql`update audit_log set action = 'tampered' where id = ${id}`],
-    ["DELETE", sql`delete from audit_log where id = ${id}`],
+  // 시험 기록은 트랜잭션 안에서만 만들고 끝에 되돌려, 검증할 때마다 기록이 쌓이지 않게 한다.
+  const ROLLBACK = new Error("rollback");
+  for (const [label, stmt] of [
+    ["UPDATE", (tx, id) => tx`update audit_log set action = 'tampered' where id = ${id}`],
+    ["DELETE", (tx, id) => tx`delete from audit_log where id = ${id}`],
   ]) {
     try {
-      await q;
-      console.log(`⚠ audit_log ${label} 허용됨`);
+      await sql.begin(async (tx) => {
+        const [{ id }] = await tx`insert into audit_log (action) values ('test.append_only_check') returning id`;
+        try {
+          await stmt(tx, id);
+          console.log(`⚠ audit_log ${label} 허용됨`);
+        } catch (e) {
+          console.log(`audit_log ${label} 차단됨: ${e.message}`);
+        }
+        throw ROLLBACK;
+      });
     } catch (e) {
-      console.log(`audit_log ${label} 차단됨: ${e.message}`);
+      if (e !== ROLLBACK) throw e;
     }
   }
 } finally {

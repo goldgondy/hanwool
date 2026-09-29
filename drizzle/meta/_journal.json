@@ -15,6 +15,13 @@
       "when": 1790684586895,
       "tag": "0001_security",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790687278547,
+      "tag": "0002_fk_fixes",
+      "breakpoints": true
     }
   ]
 }

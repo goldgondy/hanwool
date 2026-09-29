@@ -29,8 +29,8 @@ export const clients = pgTable(
     name: text("name").notNull(),
     email: text("email"),
     phone: text("phone"),
-    accountantId: text("accountant_id").references(() => user.id), // 담당 세무사
-    staffId: text("staff_id").references(() => user.id), // 담당 직원
+    accountantId: text("accountant_id").references(() => user.id, { onDelete: "set null" }), // 담당 세무사
+    staffId: text("staff_id").references(() => user.id, { onDelete: "set null" }), // 담당 직원
     createdAt: createdAt(),
   },
   (t) => [index("clients_user_idx").on(t.userId), index("clients_accountant_idx").on(t.accountantId)],
@@ -61,7 +61,7 @@ export const sources = pgTable(
     label: text("label").notNull(),
     configEnc: text("config_enc").notNull(),
     secretEnc: text("secret_enc"),
-    createdBy: text("created_by").references(() => user.id), // 고객 본인 또는 사무실 직원
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }), // 고객 본인 또는 사무실 직원
     createdAt: createdAt(),
   },
   (t) => [index("sources_client_idx").on(t.clientId)],
@@ -112,7 +112,7 @@ export const decisions = pgTable(
     category: text("category").notNull(),
     costKrw: numeric("cost_krw"),
     note: text("note"),
-    decidedBy: text("decided_by").references(() => user.id),
+    decidedBy: text("decided_by").references(() => user.id, { onDelete: "set null" }),
     decidedAt: timestamp("decided_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [primaryKey({ columns: [t.clientId, t.key] })],
@@ -154,13 +154,15 @@ export const jobs = pgTable(
   (t) => [index("jobs_status_run_idx").on(t.status, t.runAfter)],
 ).enableRLS();
 
-// 접근 기록: 누가 언제 어떤 고객 데이터를 보고 바꿨는지. 애플리케이션은 추가만 한다.
+// 접근 기록: 누가 언제 어떤 고객 데이터를 보고 바꿨는지. 추가만 가능하다 (0001_security.sql 트리거).
+// 삭제된 사용자·고객보다 오래 남아야 하므로 외래 키를 두지 않고 ID만 기록한다
+// (외래 키의 ON DELETE SET NULL은 수정이라 추가 전용 트리거에 막혀 삭제 자체가 실패한다).
 export const auditLog = pgTable(
   "audit_log",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    actorId: text("actor_id").references(() => user.id),
-    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    actorId: text("actor_id"),
+    clientId: uuid("client_id"),
     action: text("action").notNull(),
     detail: jsonb("detail"),
     ip: text("ip"),
