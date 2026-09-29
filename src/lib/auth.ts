@@ -12,8 +12,24 @@ function provider(prefix: string) {
   return clientId && clientSecret ? { clientId, clientSecret } : undefined;
 }
 
+// 카카오: 동의항목에 설정하지 않은 항목을 요청하면 로그인이 거부된다(KOE205).
+// 기본 요청(이메일·프로필 사진·닉네임) 대신 KAKAO_SCOPES로 정한 항목만 요청한다.
+// 비즈 앱이 아니면 이메일을 못 받을 수 있어, 그때는 회원번호 기반 임시 주소로 가입시킨다
+// (.invalid는 실제로 존재할 수 없는 도메인이다). 연락용 이메일은 고객 정보 단계에서 따로 받는다.
+function kakaoProvider() {
+  const base = provider("KAKAO");
+  if (!base) return undefined;
+  return {
+    ...base,
+    disableDefaultScope: true,
+    scope: (process.env.KAKAO_SCOPES ?? "profile_nickname,account_email").split(",").map((s) => s.trim()).filter(Boolean),
+    mapProfileToUser: (profile: { id: number | string; kakao_account?: { email?: string } }) =>
+      profile.kakao_account?.email ? {} : { email: `kakao-${profile.id}@no-email.invalid`, emailVerified: false },
+  };
+}
+
 const socialProviders = Object.fromEntries(
-  Object.entries({ kakao: provider("KAKAO"), naver: provider("NAVER"), google: provider("GOOGLE") }).filter(([, v]) => v),
+  Object.entries({ kakao: kakaoProvider(), naver: provider("NAVER"), google: provider("GOOGLE") }).filter(([, v]) => v),
 );
 
 export const auth = betterAuth({
