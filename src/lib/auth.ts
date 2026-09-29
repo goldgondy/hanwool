@@ -13,7 +13,8 @@ function provider(prefix: string) {
 }
 
 // 카카오: 동의항목에 설정하지 않은 항목을 요청하면 로그인이 거부된다(KOE205).
-// 기본 요청(이메일·프로필 사진·닉네임) 대신 KAKAO_SCOPES로 정한 항목만 요청한다.
+// 기본적으로 scope를 보내지 않아, 카카오 앱의 동의항목에 켜 둔 항목만 요청되게 한다.
+// 특정 항목만 요청하려면 KAKAO_SCOPES에 쉼표로 나열한다 (예: profile_nickname,account_email).
 // 비즈 앱이 아니면 이메일을 못 받을 수 있어, 그때는 회원번호 기반 임시 주소로 가입시킨다
 // (.invalid는 실제로 존재할 수 없는 도메인이다). 연락용 이메일은 고객 정보 단계에서 따로 받는다.
 function kakaoProvider() {
@@ -22,7 +23,7 @@ function kakaoProvider() {
   return {
     ...base,
     disableDefaultScope: true,
-    scope: (process.env.KAKAO_SCOPES ?? "profile_nickname,account_email").split(",").map((s) => s.trim()).filter(Boolean),
+    scope: (process.env.KAKAO_SCOPES ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     mapProfileToUser: (profile: { id: number | string; kakao_account?: { email?: string } }) =>
       profile.kakao_account?.email ? {} : { email: `kakao-${profile.id}@no-email.invalid`, emailVerified: false },
   };
