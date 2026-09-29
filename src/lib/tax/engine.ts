@@ -110,10 +110,18 @@ const ZERO = new Decimal(0);
 // 같은 시각이면 취득을 먼저 처리해, 동시에 체결된 매수·매도가 보유 부족으로 잡히지 않게 한다.
 const ORDER: Record<TaxEvent["type"], number> = { acquire: 0, fee: 1, dispose: 2 };
 
+export interface EngineOptions {
+  // 과세 시작 시각. 모의 계산("지금까지의 거래에 과세한다면")에서는 0으로 둔다.
+  taxStart?: number;
+  // 의제취득가 적용 여부. 모의 계산에서는 끈다.
+  applyDeemed?: boolean;
+}
+
 export function runEngine(
   events: TaxEvent[],
   prices20261231: Record<string, Decimal | undefined>,
   policy: EnginePolicy = DEFAULT_POLICY,
+  { taxStart = TAX_START, applyDeemed: deemedEnabled = true }: EngineOptions = {},
 ): EngineResult {
   const sorted = events
     .map((e, i) => ({ e, i }))
@@ -124,7 +132,7 @@ export function runEngine(
   const disposals: Disposal[] = [];
   const deemed: DeemedAdjustment[] = [];
   const warnings: EngineWarning[] = [];
-  let deemedApplied = false;
+  let deemedApplied = !deemedEnabled;
 
   const pool = (asset: string) => {
     let p = pools.get(asset);
@@ -180,7 +188,7 @@ export function runEngine(
   }
 
   for (const e of sorted) {
-    if (!deemedApplied && e.time >= TAX_START) applyDeemed();
+    if (!deemedApplied && e.time >= taxStart) applyDeemed();
     const p = pool(e.asset);
 
     if (e.type === "acquire") {
@@ -224,7 +232,7 @@ export function runEngine(
         costKrw: cost,
         feeKrw: ZERO,
         gainKrw: cost.neg(),
-        taxable: e.time >= TAX_START,
+        taxable: e.time >= taxStart,
       });
       continue;
     }
@@ -239,7 +247,7 @@ export function runEngine(
       costKrw: cost,
       feeKrw: e.feeKrw,
       gainKrw: e.proceedsKrw.minus(cost).minus(e.feeKrw),
-      taxable: e.time >= TAX_START,
+      taxable: e.time >= taxStart,
     });
   }
 
