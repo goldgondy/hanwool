@@ -13,7 +13,13 @@ interface RelayConfig {
 const RELAYS: Record<string, RelayConfig> = {
   bybit: {
     host: "https://api.bybit.com",
-    paths: ["/v5/account/wallet-balance", "/v5/asset/transfer/query-account-coins-balance"],
+    paths: [
+      "/v5/account/wallet-balance",
+      "/v5/asset/transfer/query-account-coins-balance",
+      "/v5/account/transaction-log",
+      "/v5/asset/deposit/query-record",
+      "/v5/asset/withdraw/query-record",
+    ],
     headers: ["X-BAPI-API-KEY", "X-BAPI-TIMESTAMP", "X-BAPI-SIGN", "X-BAPI-RECV-WINDOW"],
   },
   bitget: {

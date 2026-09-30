@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
+import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type XapiSource } from "@/lib/db";
+import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
+import { API_EXCHANGES, fetchXapiBalances } from "@/lib/sources/exchanges";
+import { VaultPanel } from "@/components/VaultPanel";
 import { formatAmount, formatDateTime } from "@/lib/format";
 import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
 import { syncEvmHistory } from "@/lib/ledger/evm-sync";
@@ -10,7 +13,8 @@ import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
 
-type LedgerSource = EvmSource | BtcSource | CsvSource;
+type LedgerSource = EvmSource | BtcSource | CsvSource | XapiSource;
+type SyncableSource = EvmSource | BtcSource | XapiSource;
 
 // 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
 interface SyncLine {
@@ -20,7 +24,13 @@ interface SyncLine {
   notes: string[];
 }
 
-async function syncSource(source: EvmSource | BtcSource, onProgress: (msg: string) => void): Promise<SyncLine[]> {
+async function syncSource(source: SyncableSource, onProgress: (msg: string) => void): Promise<SyncLine[]> {
+  if (source.kind === "xapi") {
+    const r = await syncXapiHistory(source, onProgress);
+    const notes = [...r.warnings];
+    if (r.unknownTypes.length) notes.push(`처음 보는 유형(검토 필요로 들어감): ${r.unknownTypes.join(", ")}`);
+    return [{ title: API_EXCHANGES[source.exchange].name, summary: `새 항목 ${r.added}건 반영`, notes }];
+  }
   if (source.kind === "btc") {
     const r = await syncBtcHistory(source, onProgress);
     return [{ title: "Bitcoin", summary: `사용된 주소 ${r.addressCount}개, 항목 ${r.added}건 반영`, notes: r.warnings }];
@@ -37,7 +47,8 @@ async function syncSource(source: EvmSource | BtcSource, onProgress: (msg: strin
   });
 }
 
-function fetchBalances(source: EvmSource | BtcSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
+function fetchBalances(source: SyncableSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
+  if (source.kind === "xapi") return fetchXapiBalances(source);
   return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
 }
 
@@ -177,9 +188,21 @@ function SourceLedger({ source }: { source: LedgerSource }) {
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          <button className={button} disabled={busy} onClick={() => run(true)}>
-            {busy ? "처리 중…" : "내역 동기화"}
-          </button>
+          {source.kind === "xapi" && (
+            <div className="w-full">
+              <VaultPanel />
+            </div>
+          )}
+          {!(source.kind === "xapi" && !HISTORY_SUPPORTED.has(source.exchange)) && (
+            <button className={button} disabled={busy} onClick={() => run(true)}>
+              {busy ? "처리 중…" : "내역 동기화"}
+            </button>
+          )}
+          {source.kind === "xapi" && !HISTORY_SUPPORTED.has(source.exchange) && (
+            <span className="text-sm text-stone-500">
+              {API_EXCHANGES[source.exchange].name} 거래 내역 API는 준비 중입니다. 잔고 조회만 가능합니다.
+            </span>
+          )}
           <button
             className="rounded-lg border border-stone-300 px-4 py-2 text-sm disabled:opacity-40 dark:border-stone-700"
             disabled={busy}
@@ -265,7 +288,9 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
-  const wallets = (sources ?? []).filter((s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "csv");
+  const wallets = (sources ?? []).filter(
+    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "csv" || s.kind === "xapi",
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
 
@@ -295,7 +320,7 @@ export default function LedgerPage() {
                   : "border-stone-300 dark:border-stone-700"
               }`}
             >
-              {s.label} {s.kind === "evm" ? short(s.address) : s.kind === "btc" ? "₿" : "CSV"}
+              {s.label} {s.kind === "evm" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" ? "API" : "CSV"}
             </button>
           ))}
         </div>

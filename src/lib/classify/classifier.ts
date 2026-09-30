@@ -62,9 +62,14 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
     return { ...base, category: "fiat_transfer", status: "confirmed", rule: "R0", reason: "원화·법정화폐 입출금" };
   }
 
+  // 자산 비교 기준: 거래소 기록은 자산을 심볼("BTC")로, 지갑은 체인·컨트랙트("btc:native")로 적는다.
+  // 둘이 섞인 거래(거래소 ↔ 내 지갑 이체)는 심볼로 비교하고, 지갑끼리는 컨트랙트까지 구분한다(가짜 토큰 방지).
+  const mixed = entries.some((e) => e.origin === "exchange") && entries.some((e) => e.origin !== "exchange");
+  const assetOf = (e: LedgerEntry) => (mixed ? e.asset.toUpperCase() : e.assetKey);
+
   // R4: 수수료 외 항목이 자산별로 합계 0 → 내 계정 사이에서만 움직임
   const byAsset = new Map<string, Decimal>();
-  for (const e of legs) byAsset.set(e.assetKey, (byAsset.get(e.assetKey) ?? new Decimal(0)).plus(e.amount));
+  for (const e of legs) byAsset.set(assetOf(e), (byAsset.get(assetOf(e)) ?? new Decimal(0)).plus(e.amount));
   if ([...byAsset.values()].every((v) => v.isZero())) {
     const sources = new Set(legs.map((e) => e.sourceId)).size;
     return {
@@ -85,8 +90,8 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
   }
 
   if (ins.length > 0 && outs.length > 0) {
-    const inKeys = new Set(ins.map((e) => e.assetKey));
-    const outKeys = new Set(outs.map((e) => e.assetKey));
+    const inKeys = new Set(ins.map(assetOf));
+    const outKeys = new Set(outs.map(assetOf));
     // R7: 네이티브 코인 ↔ 래핑 토큰 (같은 체인)
     const all = [...inKeys, ...outKeys];
     const chain = all[0].split(":")[0];
@@ -133,9 +138,56 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
 }
 
 // 전체 원장을 그룹으로 묶어 분류하고, 사용자 결정이 있으면 그것을 우선한다.
-export function classifyAll({ entries, ownAddresses, decisions }: ClassifyInput): GroupView[] {
+// 트랜잭션 해시 표기 통일 (대소문자, 0x 유무)
+const normHash = (h: string) => h.trim().toLowerCase().replace(/^0x/, "");
+
+// 같은 트랜잭션 해시를 가진 그룹을 하나로 합친다.
+// 예: 거래소 출금 기록(bybit:wd:…)과 내 지갑 입금 기록(btc:<txid>)은 같은 이동이다 → 합쳐서 R4로 내 계정 간 이체.
+// 합친 그룹의 키는 블록체인 쪽 groupId를 우선한다 (재동기화해도 바뀌지 않게).
+export function groupByTransaction(entries: LedgerEntry[]): Map<string, LedgerEntry[]> {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(x, r);
+    return r;
+  };
+  const chainFirst = (a: string, b: string, aChain: boolean, bChain: boolean) =>
+    aChain !== bChain ? (aChain ? a : b) : a < b ? a : b;
+  const isChainGroup = new Map<string, boolean>();
+  for (const e of entries) {
+    if (!parent.has(e.groupId)) parent.set(e.groupId, e.groupId);
+    if (e.origin !== "exchange") isChainGroup.set(e.groupId, true);
+  }
+
+  const byHash = new Map<string, string>();
+  for (const e of entries) {
+    if (!e.txHash) continue;
+    const h = normHash(e.txHash);
+    const other = byHash.get(h);
+    if (!other) {
+      byHash.set(h, e.groupId);
+      continue;
+    }
+    const a = find(e.groupId);
+    const b = find(other);
+    if (a === b) continue;
+    const root = chainFirst(a, b, !!isChainGroup.get(a), !!isChainGroup.get(b));
+    parent.set(a, root);
+    parent.set(b, root);
+    isChainGroup.set(root, !!isChainGroup.get(a) || !!isChainGroup.get(b));
+  }
+
   const groups = new Map<string, LedgerEntry[]>();
-  for (const e of entries) groups.set(e.groupId, [...(groups.get(e.groupId) ?? []), e]);
+  for (const e of entries) {
+    const key = find(e.groupId);
+    groups.set(key, [...(groups.get(key) ?? []), e]);
+  }
+  return groups;
+}
+
+export function classifyAll({ entries, ownAddresses, decisions }: ClassifyInput): GroupView[] {
+  const groups = groupByTransaction(entries);
 
   return [...groups.entries()]
     .map(([key, list]) => {

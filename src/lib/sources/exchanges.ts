@@ -99,7 +99,7 @@ export async function signGate(c: Creds, path: string, params: Record<string, st
 
 // ── 조회 ──
 
-async function relay(exchange: ApiExchange, req: SignedRequest): Promise<unknown> {
+export async function relay(exchange: ApiExchange, req: SignedRequest): Promise<unknown> {
   const res = await fetch(`/api/relay/${exchange}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -185,12 +185,16 @@ async function gate(c: Creds): Promise<RawBalance[]> {
     .filter((x): x is RawBalance => x !== null);
 }
 
-export async function fetchXapiBalances(source: XapiSource, warn: Warn = () => {}): Promise<RawBalance[]> {
-  const creds: Creds = {
+export async function xapiCreds(source: XapiSource): Promise<Creds> {
+  return {
     apiKey: source.apiKey,
     secret: await decrypt(source.encSecret),
     passphrase: source.encPassphrase ? await decrypt(source.encPassphrase) : undefined,
   };
+}
+
+export async function fetchXapiBalances(source: XapiSource, warn: Warn = () => {}): Promise<RawBalance[]> {
+  const creds = await xapiCreds(source);
   switch (source.exchange) {
     case "bybit":
       return bybit(creds, warn);
