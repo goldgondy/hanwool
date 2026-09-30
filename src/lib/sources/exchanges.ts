@@ -2,14 +2,26 @@ import Decimal from "@/lib/decimal";
 import type { XapiSource } from "@/lib/db";
 import type { RawBalance, Warn } from "@/lib/sources/types";
 import { decrypt } from "@/lib/vault";
+import { fetchCoinbaseBalances } from "./coinbase";
 import { hmacSha256Base64, hmacSha256Hex, hmacSha512Hex, sha512Hex } from "./sign";
 
 // 거래소 API 잔고 조회 (바이비트, 비트겟, MEXC, 게이트). 서명은 브라우저에서 하고 /api/relay/[거래소]로 중계한다.
 // 서명 방식은 각 거래소 공식 문서·SDK 기준 (2026-09-30 확인). ⚠ 실제 키로 검증 전.
 
-export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate";
+export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate" | "coinbase";
 
-export const API_EXCHANGES: Record<ApiExchange, { name: string; needsPassphrase: boolean; keyHelp: string }> = {
+export const API_EXCHANGES: Record<
+  ApiExchange,
+  { name: string; needsPassphrase: boolean; keyHelp: string; keyLabel?: string; secretLabel?: string; multilineSecret?: boolean }
+> = {
+  coinbase: {
+    name: "코인베이스",
+    needsPassphrase: false,
+    keyHelp: "coinbase.com/settings/api(CDP) → API 키 생성 → 서명 알고리즘은 ECDSA(ES256), 권한은 View(조회)만. 다운로드한 파일의 name과 privateKey를 넣으세요",
+    keyLabel: "API 키 이름 (organizations/…/apiKeys/…)",
+    secretLabel: "개인키 (-----BEGIN EC PRIVATE KEY----- 부터 끝까지)",
+    multilineSecret: true,
+  },
   bybit: { name: "바이비트", needsPassphrase: false, keyHelp: "API 관리 → 새 키 생성 → 시스템 생성 키, 권한은 읽기 전용(Read-Only)" },
   bitget: { name: "비트겟", needsPassphrase: true, keyHelp: "API 관리 → API 키 생성 → 권한은 읽기(Read-only)만. 생성 시 정한 Passphrase가 필요" },
   mexc: { name: "MEXC", needsPassphrase: false, keyHelp: "API 관리 → 키 생성 → 권한은 조회(Read)만" },
@@ -188,5 +200,7 @@ export async function fetchXapiBalances(source: XapiSource, warn: Warn = () => {
       return mexc(creds);
     case "gate":
       return gate(creds);
+    case "coinbase":
+      return fetchCoinbaseBalances(creds.apiKey, creds.secret);
   }
 }

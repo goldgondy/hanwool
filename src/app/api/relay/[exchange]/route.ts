@@ -31,6 +31,12 @@ const RELAYS: Record<string, RelayConfig> = {
     paths: ["/api/v4/spot/accounts"],
     headers: ["KEY", "Timestamp", "SIGN"],
   },
+  // JWT에 요청 경로가 서명되어 있어, 다른 경로로 바꿔 쓸 수 없다.
+  coinbase: {
+    host: "https://api.coinbase.com",
+    paths: ["/api/v3/brokerage/accounts"],
+    headers: ["Authorization"],
+  },
 };
 
 export async function POST(request: Request, { params }: { params: Promise<{ exchange: string }> }) {

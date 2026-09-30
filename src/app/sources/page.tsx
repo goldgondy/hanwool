@@ -168,8 +168,21 @@ function XapiForm() {
         <span className="text-amber-700 dark:text-amber-400">실제 키로 검증 전인 연결입니다.</span>
       </p>
       <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`이름 (기본: ${info.name})`} />
-      <input className={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key" required />
-      <input className={input} type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} placeholder="Secret Key" required />
+      <input className={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={info.keyLabel ?? "API Key"} required />
+      {info.multilineSecret ? (
+        <textarea
+          className={`${input} font-mono text-xs`}
+          rows={4}
+          value={apiSecret}
+          onChange={(e) => setApiSecret(e.target.value)}
+          placeholder={info.secretLabel}
+          required
+          autoComplete="off"
+          spellCheck={false}
+        />
+      ) : (
+        <input className={input} type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} placeholder={info.secretLabel ?? "Secret Key"} required />
+      )}
       {info.needsPassphrase && (
         <input className={input} type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Passphrase" required />
       )}
