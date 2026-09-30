@@ -6,7 +6,8 @@ import { db, type CsvSource, type EvmChain } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
-import { EVM_CHAINS } from "@/lib/sources/evm";
+import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
+import { discoverWallets, requestAddresses, type WalletDetail } from "@/lib/wallet/eip6963";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
 import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
@@ -450,69 +451,166 @@ async function findDuplicateBtc(raw: string, scriptType: ScriptType | ""): Promi
   return null;
 }
 
+// EVM 주소를 연결한다. 같은 주소가 이미 있으면 새 계정을 만들지 않고 체인만 합친다 (이중 집계 방지).
+async function addOrMergeEvm(label: string, address: string, chains: EvmChain[]): Promise<string> {
+  const addr = address.trim();
+  const existing = (await db.sources.toArray()).find((s) => s.kind === "evm" && s.address.toLowerCase() === addr.toLowerCase());
+  if (existing && existing.kind === "evm") {
+    const added = chains.filter((c) => !existing.chains.includes(c));
+    if (added.length > 0) await db.sources.put({ ...existing, chains: [...existing.chains, ...added] });
+    return added.length > 0
+      ? `이미 연결된 주소라 기존 계정(${existing.label})에 ${added.map((c) => EVM_CHAINS[c].name).join(", ")}를 추가했습니다.`
+      : `이미 연결된 주소입니다 (${existing.label}).`;
+  }
+  await db.sources.add({ id: crypto.randomUUID(), kind: "evm", label, address: addr, chains, createdAt: Date.now() });
+  return `${label} (${addr.slice(0, 6)}…${addr.slice(-4)})를 연결했습니다.`;
+}
+
+const ACTIVITY_LABEL: Record<ChainActivity, { text: string; cls: string }> = {
+  active: { text: "사용함", cls: "text-emerald-700 dark:text-emerald-400" },
+  inactive: { text: "안 씀", cls: "text-stone-400" },
+  unknown: { text: "확인 실패", cls: "text-amber-700 dark:text-amber-400" },
+};
+
 function EvmForm() {
   const [label, setLabel] = useState("내 지갑");
   const [address, setAddress] = useState("");
-  const [chains, setChains] = useState<EvmChain[]>(["eth", "arb", "base"]);
+  const [chains, setChains] = useState<EvmChain[]>(["eth"]);
+  const [activity, setActivity] = useState<Partial<Record<EvmChain, ChainActivity>> | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [wallets, setWallets] = useState<WalletDetail[] | null>(null);
+  const [pending, setPending] = useState<string[]>([]); // 지갑에서 가져왔지만 아직 추가하지 않은 주소
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const valid = /^0x[0-9a-fA-F]{40}$/.test(address.trim());
 
-  const [notice, setNotice] = useState<string | null>(null);
+  // 사용한 체인을 찾아 자동으로 체크한다. 확인에 실패한 체인도 체크해 두어 빠뜨리지 않게 한다.
+  async function detect(addr: string) {
+    setDetecting(true);
+    setActivity(null);
+    try {
+      const r = await detectActiveChains(addr.trim());
+      setActivity(Object.fromEntries(r.map((x) => [x.chain, x.status])));
+      const picked = r.filter((x) => x.status !== "inactive").map((x) => x.chain);
+      setChains(picked.length ? picked : ["eth"]);
+      if (!picked.length) setNotice("지원하는 체인에서 사용 기록을 찾지 못했습니다. 주소를 확인하세요.");
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  function load(addr: string) {
+    setAddress(addr);
+    setNotice(null);
+    void detect(addr);
+  }
+
+  async function connect() {
+    setError(null);
+    const found = await discoverWallets();
+    if (found.length === 0) {
+      setError("이 브라우저에서 확장 지갑을 찾지 못했습니다. 지갑을 설치했다면 새로고침하거나, 주소를 직접 입력하세요.");
+      return;
+    }
+    if (found.length === 1) return pick(found[0]);
+    setWallets(found);
+  }
+
+  async function pick(w: WalletDetail) {
+    setWallets(null);
+    setError(null);
+    try {
+      const addrs = await requestAddresses(w.provider);
+      if (addrs.length === 0) throw new Error("지갑에서 받은 주소가 없습니다");
+      setLabel(w.info.name);
+      setPending(addrs.slice(1));
+      load(addrs[0]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!valid || chains.length === 0) return;
-    // 같은 주소가 이미 있으면 새 계정을 만들지 않고 체인만 합친다 (이중 집계 방지).
-    const existing = (await db.sources.toArray()).find(
-      (s) => s.kind === "evm" && s.address.toLowerCase() === address.trim().toLowerCase(),
-    );
-    if (existing && existing.kind === "evm") {
-      const added = chains.filter((c) => !existing.chains.includes(c));
-      if (added.length > 0) await db.sources.put({ ...existing, chains: [...existing.chains, ...added] });
-      setNotice(
-        added.length > 0
-          ? `이미 연결된 주소라 기존 계정(${existing.label})에 ${added.map((c) => EVM_CHAINS[c].name).join(", ")}를 추가했습니다.`
-          : `이미 연결된 주소입니다 (${existing.label}).`,
-      );
+    const n = pending.length;
+    setNotice(await addOrMergeEvm(label.trim() || "내 지갑", address, chains));
+    setActivity(null);
+    if (n > 0) {
+      load(pending[0]);
+      setPending(pending.slice(1));
+    } else {
       setAddress("");
-      return;
     }
-    setNotice(null);
-    await db.sources.add({
-      id: crypto.randomUUID(),
-      kind: "evm",
-      label: label.trim() || "내 지갑",
-      address: address.trim(),
-      chains,
-      createdAt: Date.now(),
-    });
-    setAddress("");
   }
 
   return (
     <form onSubmit={onSubmit} className={card}>
-      <h3 className="font-semibold">EVM 지갑 주소</h3>
+      <h3 className="font-semibold">EVM 지갑 (메타마스크, 라비, 트러스트 등)</h3>
       <p className="text-xs leading-5 text-stone-500">
-        공개 블록체인 데이터(Blockscout)를 조회하므로 API 키가 필요 없습니다. 주소만으로는 자산을
-        옮길 수 없지만, <b>복구 문구(시드)나 개인키는 절대 입력하지 마세요.</b>
+        공개 블록체인 데이터를 조회하므로 주소만 있으면 됩니다. 지갑 연결은 <b>주소 확인 권한만</b> 요청하며 서명·거래를
+        요청하지 않습니다. <b>복구 문구(시드)나 개인키는 절대 입력하지 마세요.</b>
       </p>
+
+      <button type="button" onClick={connect} className="w-full rounded-lg border border-stone-300 px-4 py-2 text-sm font-medium dark:border-stone-700">
+        확장 지갑으로 연결
+      </button>
+      {wallets && (
+        <div className="flex flex-wrap gap-2">
+          {wallets.map((w) => (
+            <button
+              type="button"
+              key={w.info.uuid}
+              onClick={() => pick(w)}
+              className="flex items-center gap-2 rounded-lg border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700"
+            >
+              {w.info.icon && (
+                // 지갑이 EIP-6963으로 넘겨준 data URI 아이콘이라 next/image 최적화 대상이 아니다
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={w.info.icon} alt="" className="h-5 w-5" />
+              )}
+              {w.info.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      <div className="flex items-center gap-3 text-xs text-stone-400">
+        <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+        또는 주소 직접 입력
+        <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+      </div>
+
       <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
-      <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="0x…" required />
+      <div className="flex gap-2">
+        <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="0x…" required />
+        <button
+          type="button"
+          disabled={!valid || detecting}
+          onClick={() => detect(address)}
+          className="shrink-0 rounded-lg border border-stone-300 px-3 text-xs disabled:opacity-40 dark:border-stone-700"
+        >
+          {detecting ? "찾는 중…" : "사용한 체인 찾기"}
+        </button>
+      </div>
+      {pending.length > 0 && <p className="text-xs text-stone-500">지갑에서 가져온 주소가 {pending.length}개 더 있습니다. 이 주소를 추가하면 다음 주소로 넘어갑니다.</p>}
+
       <div className="flex flex-wrap gap-3 text-sm">
         {(Object.keys(EVM_CHAINS) as EvmChain[]).map((c) => (
           <label key={c} className="flex items-center gap-1.5">
             <input
               type="checkbox"
               checked={chains.includes(c)}
-              onChange={(e) =>
-                setChains(e.target.checked ? [...chains, c] : chains.filter((x) => x !== c))
-              }
+              onChange={(e) => setChains(e.target.checked ? [...chains, c] : chains.filter((x) => x !== c))}
             />
             {EVM_CHAINS[c].name}
+            {activity?.[c] && <span className={`text-xs ${ACTIVITY_LABEL[activity[c]!].cls}`}>{ACTIVITY_LABEL[activity[c]!].text}</span>}
           </label>
         ))}
       </div>
       {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
-      <button className={button} disabled={!valid || chains.length === 0}>
+      <button className={button} disabled={!valid || chains.length === 0 || detecting}>
         추가
       </button>
     </form>

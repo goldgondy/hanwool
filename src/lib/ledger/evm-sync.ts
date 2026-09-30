@@ -1,5 +1,5 @@
 import { db, type EvmChain, type EvmSource } from "@/lib/db";
-import { EVM_CHAINS, blockscoutPages, blockscoutRpc, evmAssetKey } from "@/lib/sources/evm";
+import { EVM_CHAINS, blockscoutPages, evmRpc, evmAssetKey } from "@/lib/sources/evm";
 import {
   buildEvmEntries,
   type InternalTx,
@@ -58,7 +58,7 @@ interface BsTokenTransfer {
 const blockOf = (x: { block_number?: number; block?: number }) => x.block_number ?? x.block ?? 0;
 
 async function fetchNonce(chain: EvmChain, address: string): Promise<number | null> {
-  const hex = await blockscoutRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]);
+  const hex = await evmRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]);
   return hex ? parseInt(hex, 16) : null;
 }
 
