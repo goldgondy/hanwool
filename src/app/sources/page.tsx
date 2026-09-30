@@ -2,7 +2,9 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type EvmChain } from "@/lib/db";
+import { db, type CsvSource, type EvmChain } from "@/lib/db";
+import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
+import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { EVM_CHAINS } from "@/lib/sources/evm";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
 import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
@@ -117,7 +119,136 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", evm: "EVM", btc: "Bitcoin" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", evm: "EVM", btc: "Bitcoin", csv: "CSV" } as const;
+
+interface CsvPreview {
+  fileName: string;
+  adapter: CsvAdapter;
+  table: CsvTable;
+  result: ImportResult;
+}
+
+function CsvImportCard() {
+  const csvSources = useLiveQuery(() => db.sources.where("kind").equals("csv").toArray(), []) as CsvSource[] | undefined;
+  const [preview, setPreview] = useState<CsvPreview | null>(null);
+  const [unknownHeaders, setUnknownHeaders] = useState<string[] | null>(null);
+  const [target, setTarget] = useState<string>("new");
+  const [label, setLabel] = useState("");
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onFile(file: File | undefined) {
+    setPreview(null);
+    setUnknownHeaders(null);
+    setDone(null);
+    setError(null);
+    if (!file) return;
+    const text = await file.text();
+    const found = detect(text);
+    if (!found.adapter) {
+      setUnknownHeaders(found.headers);
+      return;
+    }
+    // 미리보기용 변환 (sourceId는 저장할 때 확정)
+    const result = found.adapter.convert(found.table, "preview");
+    setPreview({ fileName: file.name, adapter: found.adapter, table: found.table, result });
+    const same = (csvSources ?? []).find((s) => s.exchange === found.adapter.exchange);
+    setTarget(same ? same.id : "new");
+    setLabel(`${found.adapter.exchangeName} (CSV)`);
+  }
+
+  async function onImport() {
+    if (!preview) return;
+    setError(null);
+    try {
+      const { adapter } = preview;
+      let source: CsvSource;
+      if (target === "new") {
+        source = { id: crypto.randomUUID(), kind: "csv", label: label.trim() || `${adapter.exchangeName} (CSV)`, exchange: adapter.exchange, imports: [], createdAt: Date.now() };
+      } else {
+        source = (csvSources ?? []).find((s) => s.id === target)!;
+      }
+      // 실제 계정 ID로 다시 변환해 결정적 ID를 확정한다
+      const { entries } = adapter.convert(preview.table, source.id);
+      const existing = await db.ledger.bulkGet(entries.map((e) => e.id));
+      const added = existing.filter((x) => !x).length;
+      await db.transaction("rw", db.sources, db.ledger, async () => {
+        await db.ledger.bulkPut(entries);
+        await db.sources.put({
+          ...source,
+          imports: [...source.imports, { at: Date.now(), fileName: preview.fileName, format: adapter.id, rows: preview.result.rowCount, added }],
+        });
+      });
+      setDone(`${entries.length}건 중 새 거래 ${added}건을 가져왔습니다${entries.length - added ? ` (이미 있던 ${entries.length - added}건은 건너뜀)` : ""}.`);
+      setPreview(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const r = preview?.result;
+  const fmt = (t: number) => new Date(t).toLocaleDateString("ko-KR");
+
+  return (
+    <div className={card}>
+      <h3 className="font-semibold">거래소 CSV 가져오기</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        API 키 없이 거래소에서 내려받은 거래내역 파일로 연결합니다. 파일은 이 브라우저 안에서만 읽고 서버로 보내지
+        않습니다. 지원: {ADAPTERS.map((a) => a.exchangeName).join(", ")} · 준비 중: {PLANNED_EXCHANGES.join(", ")}
+      </p>
+      <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm" />
+
+      {preview && r && (
+        <div className="space-y-2 rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-900">
+          <p>
+            <b>{preview.adapter.exchangeName}</b> · {preview.adapter.formatName}
+            {!preview.adapter.verified && (
+              <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-xs text-amber-900">샘플 검증 전 형식</span>
+            )}
+          </p>
+          <p className="text-xs text-stone-600 dark:text-stone-400">
+            {r.rowCount}줄 → 원장 {r.entries.length}건{r.range ? ` · ${fmt(r.range.from)} ~ ${fmt(r.range.to)}` : ""}
+          </p>
+          {r.unknownTypes.length > 0 && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              처음 보는 유형 {r.unknownTypes.length}개는 &lsquo;검토 필요&rsquo;로 들어갑니다: {r.unknownTypes.join(", ")}
+            </p>
+          )}
+          {r.warnings.map((w, i) => (
+            <p key={i} className="text-xs text-amber-700 dark:text-amber-400">{w}</p>
+          ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <select className={`${input} w-auto`} value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="new">새 계정으로</option>
+              {(csvSources ?? [])
+                .filter((s) => s.exchange === preview.adapter.exchange)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}에 합치기
+                  </option>
+                ))}
+            </select>
+            {target === "new" && <input className={`${input} w-48`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="계정 이름" />}
+            <button className={button} onClick={onImport}>
+              가져오기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {unknownHeaders && (
+        <div className="space-y-1 rounded-lg bg-red-50 p-3 text-xs dark:bg-red-950/40">
+          <p className="font-medium">지원하지 않는 형식입니다.</p>
+          <p className="break-all text-stone-600 dark:text-stone-400">열 이름: {unknownHeaders.join(", ") || "(읽지 못함)"}</p>
+          <p className="text-stone-600 dark:text-stone-400">열을 직접 연결하는 화면은 준비 중입니다.</p>
+        </div>
+      )}
+      {done && <p className="text-sm text-emerald-700 dark:text-emerald-400">{done}</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {preview && <p className="text-xs text-stone-500">파일 받는 법: {preview.adapter.howToExport}</p>}
+    </div>
+  );
+}
 
 function preview(input: string, scriptType: ScriptType | "") {
   if (!input.trim()) return null;
@@ -352,7 +483,9 @@ export default function SourcesPage() {
                       .join(", ")}`
                   : s.kind === "btc"
                     ? `${mask(s.input)} · ${new URL(s.esploraUrl).host}`
-                    : mask(s.apiKey)}
+                    : s.kind === "csv"
+                      ? `파일 ${s.imports.length}개 가져옴`
+                      : mask(s.apiKey)}
               </code>
               <button
                 onClick={() => removeSource(s.id)}
@@ -368,6 +501,7 @@ export default function SourcesPage() {
       <div className="grid gap-6 md:grid-cols-2">
         <BtcForm />
         <EvmForm />
+        <CsvImportCard />
         <BinanceForm />
         <OkxForm />
       </div>

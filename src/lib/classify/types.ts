@@ -11,6 +11,7 @@ export type Category =
   | "external_in"
   | "external_out"
   | "fee_only"
+  | "fiat_transfer"
   | "spam"
   | "defi_unsupported"
   | "unknown";
@@ -26,6 +27,7 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   external_in: "외부에서 받음",
   external_out: "외부로 보냄",
   fee_only: "수수료만",
+  fiat_transfer: "원화·법정화폐 입출금",
   spam: "스팸",
   defi_unsupported: "미지원 DeFi",
   unknown: "미분류",

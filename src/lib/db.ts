@@ -3,7 +3,7 @@ import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "evm" | "btc";
+export type SourceKind = "binance" | "okx" | "evm" | "btc" | "csv";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -50,7 +50,17 @@ export interface BtcSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | EvmSource | BtcSource;
+// 거래소 CSV로 가져온 계정. 같은 거래소 파일을 여러 번 올려도 중복 없이 합쳐진다.
+export interface CsvSource {
+  id: string;
+  kind: "csv";
+  label: string;
+  exchange: string; // 변환기 거래소 ID (lib/importers)
+  imports: { at: number; fileName: string; format: string; rows: number; added: number }[];
+  createdAt: number;
+}
+
+export type Source = BinanceSource | OkxSource | EvmSource | BtcSource | CsvSource;
 export type ExchangeSource = BinanceSource | OkxSource;
 
 export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon";
@@ -97,6 +107,12 @@ export interface LedgerEntry {
   groupId: string; // 같은 트랜잭션/주문의 항목끼리 묶음
   txHash?: string;
   counterparty?: string; // 상대 주소
+  // 기록 출처. 거래소 체결·보상 기록은 추정이 아니므로 분류를 확정한다 (분류 규칙 R1–R3). 없으면 블록체인.
+  origin?: "chain" | "exchange";
+  // 거래소가 명시한 성격 (예: reward, airdrop). 분류 규칙에서 쓴다.
+  tag?: "reward" | "airdrop";
+  // 원본 기록의 유형 이름 (예: 바이낸스 "Transaction Buy"). 검토 화면 표시용.
+  rawType?: string;
 }
 
 export interface SyncState {

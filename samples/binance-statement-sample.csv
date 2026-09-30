@@ -1,0 +1,13 @@
+User_ID,UTC_Time,Account,Operation,Coin,Change,Remark
+10000001,2025-03-01 09:00:00,Spot,Deposit,USDT,1000,
+10000001,2025-03-02 10:00:00,Spot,Transaction Buy,BTC,0.01,
+10000001,2025-03-02 10:00:00,Spot,Transaction Spend,USDT,-900,
+10000001,2025-03-02 10:00:00,Spot,Transaction Fee,BNB,-0.002,
+10000001,2025-03-03 00:00:00,Spot,Simple Earn Flexible Subscription,USDT,-100,
+10000001,2025-03-03 00:00:00,Earn,Simple Earn Flexible Subscription,USDT,100,
+10000001,2025-03-04 00:00:00,Earn,Simple Earn Flexible Interest,USDT,0.05,
+10000001,2025-03-05 00:00:00,Spot,Airdrop Assets,XYZ,10,
+10000001,2025-04-10 14:30:00,Spot,Transaction Sold,BTC,-0.005,
+10000001,2025-04-10 14:30:00,Spot,Transaction Revenue,USDT,410,
+10000001,2025-04-10 14:30:00,Spot,Transaction Fee,USDT,-0.41,
+10000001,2025-04-11 00:00:00,Spot,Withdraw,BTC,-0.005,

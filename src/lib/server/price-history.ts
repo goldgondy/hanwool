@@ -218,9 +218,19 @@ export async function pricesAt(queries: PriceQuery[]): Promise<PriceResult[]> {
     }
   }
 
+  // 법정화폐 달러(거래소 달러 거래의 대가): 스테이블코인과 달리 ECB 기준 환율을 그대로 쓴다.
+  const usdFiat = norm.map((_, i) => i).filter((i) => pending(i) && norm[i].symbol === "USD");
+  if (usdFiat.length > 0) {
+    const fx = await resolveFx(usdFiat.map((i) => iso(norm[i].time).slice(0, 10)));
+    for (const i of usdFiat) {
+      const r = fx.get(iso(norm[i].time).slice(0, 10));
+      if (r) results[i] = { krw: r.toString(), via: "ECB 원/달러 환율" };
+    }
+  }
+
   // 2) 바이낸스 USDT × 원/달러, 스테이블코인은 1달러 × 원/달러
   const usd = new Map<number, { price: Decimal; via: string }>();
-  for (const [symbol, idx] of bySymbol(norm.map((_, i) => i).filter(pending))) {
+  for (const [symbol, idx] of bySymbol(norm.map((_, i) => i).filter((i) => pending(i) && norm[i].symbol !== "USD"))) {
     if (STABLECOINS.has(symbol)) {
       for (const i of idx) usd.set(i, { price: new Decimal(1), via: `${symbol}=1달러` });
       continue;

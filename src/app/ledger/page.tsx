@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type BtcSource, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
+import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry } from "@/lib/db";
 import { formatAmount, formatDateTime } from "@/lib/format";
 import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
 import { syncEvmHistory } from "@/lib/ledger/evm-sync";
@@ -10,7 +10,7 @@ import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
 
-type LedgerSource = EvmSource | BtcSource;
+type LedgerSource = EvmSource | BtcSource | CsvSource;
 
 // 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
 interface SyncLine {
@@ -20,7 +20,7 @@ interface SyncLine {
   notes: string[];
 }
 
-async function syncSource(source: LedgerSource, onProgress: (msg: string) => void): Promise<SyncLine[]> {
+async function syncSource(source: EvmSource | BtcSource, onProgress: (msg: string) => void): Promise<SyncLine[]> {
   if (source.kind === "btc") {
     const r = await syncBtcHistory(source, onProgress);
     return [{ title: "Bitcoin", summary: `사용된 주소 ${r.addressCount}개, 항목 ${r.added}건 반영`, notes: r.warnings }];
@@ -37,7 +37,7 @@ async function syncSource(source: LedgerSource, onProgress: (msg: string) => voi
   });
 }
 
-function fetchBalances(source: LedgerSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
+function fetchBalances(source: EvmSource | BtcSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
   return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
 }
 
@@ -142,6 +142,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
   const shown = (entries ?? []).filter((e) => !selected || e.assetKey === selected).slice(0, 300);
 
   async function run(withSync: boolean) {
+    if (source.kind === "csv") return;
     setBusy(true);
     setError(null);
     try {
@@ -160,19 +161,35 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <button className={button} disabled={busy} onClick={() => run(true)}>
-          {busy ? "처리 중…" : "내역 동기화"}
-        </button>
-        <button
-          className="rounded-lg border border-stone-300 px-4 py-2 text-sm disabled:opacity-40 dark:border-stone-700"
-          disabled={busy}
-          onClick={() => run(false)}
-        >
-          잔고 대조만
-        </button>
-        <span className="text-sm text-stone-500">{progress}</span>
-      </div>
+      {source.kind === "csv" ? (
+        <div className="space-y-1 text-sm">
+          <p className="text-stone-500">
+            CSV로 가져온 계정입니다. 새 거래가 생기면 연결 계정 화면에서 파일을 다시 올리세요 (겹치는 거래는 자동으로 건너뜁니다).
+            거래소 잔고를 직접 조회할 수 없어 잔고 대조는 하지 않습니다.
+          </p>
+          <ul className="text-xs text-stone-500">
+            {source.imports.map((im, i) => (
+              <li key={i}>
+                {formatDateTime(im.at)} · {im.fileName} · {im.rows}줄 · 새 거래 {im.added}건
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <button className={button} disabled={busy} onClick={() => run(true)}>
+            {busy ? "처리 중…" : "내역 동기화"}
+          </button>
+          <button
+            className="rounded-lg border border-stone-300 px-4 py-2 text-sm disabled:opacity-40 dark:border-stone-700"
+            disabled={busy}
+            onClick={() => run(false)}
+          >
+            잔고 대조만
+          </button>
+          <span className="text-sm text-stone-500">{progress}</span>
+        </div>
+      )}
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {results && (
@@ -248,7 +265,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
-  const wallets = (sources ?? []).filter((s): s is LedgerSource => s.kind === "evm" || s.kind === "btc");
+  const wallets = (sources ?? []).filter((s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "csv");
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
 
@@ -278,7 +295,7 @@ export default function LedgerPage() {
                   : "border-stone-300 dark:border-stone-700"
               }`}
             >
-              {s.label} {s.kind === "evm" ? short(s.address) : "₿"}
+              {s.label} {s.kind === "evm" ? short(s.address) : s.kind === "btc" ? "₿" : "CSV"}
             </button>
           ))}
         </div>

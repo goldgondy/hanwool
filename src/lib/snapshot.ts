@@ -20,6 +20,21 @@ async function fetchPrices(symbols: string[]): Promise<PriceResponse> {
   return res.json();
 }
 
+// CSV로 가져온 계정은 거래소에 잔고를 물을 수 없으므로 원장 합계를 잔고로 본다.
+// 전체 기간의 명세서를 가져왔다면 실제 잔고와 같다. 법정화폐는 제외한다.
+async function ledgerBalances(sourceId: string, label: string): Promise<RawBalance[]> {
+  const sums = new Map<string, { asset: string; amount: Decimal }>();
+  for (const e of await db.ledger.where("sourceId").equals(sourceId).toArray()) {
+    if (e.assetKey.startsWith("fiat:")) continue;
+    const cur = sums.get(e.assetKey) ?? { asset: e.asset, amount: new Decimal(0) };
+    cur.amount = cur.amount.plus(e.amount);
+    sums.set(e.assetKey, cur);
+  }
+  return [...sums.entries()]
+    .filter(([, v]) => v.amount.gt(0))
+    .map(([assetKey, v]) => ({ location: `${label} (CSV 원장 합계)`, asset: v.asset, rawAsset: v.asset, assetKey, amount: v.amount }));
+}
+
 export async function takeSnapshot(note?: string): Promise<Snapshot> {
   const sources = await db.sources.toArray();
 
@@ -42,6 +57,8 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           balances = await fetchOkxBalances(s);
         } else if (s.kind === "btc") {
           balances = await fetchBtcBalances(s);
+        } else if (s.kind === "csv") {
+          balances = await ledgerBalances(s.id, s.label);
         } else {
           balances = await fetchEvmBalances(s);
         }

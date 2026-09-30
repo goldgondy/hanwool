@@ -2,11 +2,13 @@ import Decimal from "@/lib/decimal";
 import { STABLECOINS } from "@/lib/assets";
 import type { GroupView } from "@/lib/classify/classifier";
 import type { Category } from "@/lib/classify/types";
+import type { LedgerEntry } from "@/lib/db";
 import type { TaxEvent } from "./engine";
 
 // 분류된 원장 그룹 → 엔진 과세 이벤트 (docs/classification.md §3, §6)
 // - 원가 풀은 심볼 단위로 계정·체인을 넘어 하나다. 래핑 토큰은 원래 코인의 풀을 쓴다 (래핑은 비과세).
 // - 그룹 안에서 풀별 순수량으로 판단하므로, 내 계정으로 되돌아온 부분은 자연히 상쇄된다.
+// - 법정화폐(원화 등)는 원가 풀이 아니다. 원화 매수·매도에서는 실제 지불·수령한 원화(수수료 포함)가 취득가·양도가다.
 
 const POOL_ALIASES: Record<string, string> = { WETH: "ETH", WPOL: "POL", WMATIC: "POL", MATIC: "POL" };
 export const poolOf = (symbol: string) => POOL_ALIASES[symbol.toUpperCase()] ?? symbol.toUpperCase();
@@ -16,24 +18,39 @@ export const DEEMED_PRICE_TIME = Date.parse("2026-12-31T23:59:59+09:00");
 
 export const priceKey = (pool: string, time: number) => `${pool}@${time}`;
 
-const VALUED: Category[] = ["trade", "external_out", "external_in"];
+const VALUED: Category[] = ["trade", "external_out", "external_in", "buy_fiat", "sell_fiat"];
 
+const isFiatEntry = (e: LedgerEntry) => e.assetKey.startsWith("fiat:");
+const fiatCode = (e: LedgerEntry) => e.assetKey.slice("fiat:".length);
+
+// 가상자산 풀별 순수량 (수수료·법정화폐 제외)
 function netsOf(g: GroupView) {
   const nets = new Map<string, Decimal>();
   for (const e of g.entries) {
-    if (e.kind === "fee") continue;
+    if (e.kind === "fee" || isFiatEntry(e)) continue;
     const p = poolOf(e.asset);
     nets.set(p, (nets.get(p) ?? new Decimal(0)).plus(e.amount));
   }
   return [...nets.entries()].filter(([, q]) => !q.isZero());
 }
 
-// 원화 시세가 필요한 (풀, 시각) 목록
+// 법정화폐 통화별 순수량 (법정화폐 수수료 포함)
+function fiatNetsOf(g: GroupView) {
+  const nets = new Map<string, Decimal>();
+  for (const e of g.entries) {
+    if (!isFiatEntry(e)) continue;
+    nets.set(fiatCode(e), (nets.get(fiatCode(e)) ?? new Decimal(0)).plus(e.amount));
+  }
+  return [...nets.entries()].filter(([, q]) => !q.isZero());
+}
+
+// 원화 시세가 필요한 (풀 또는 통화, 시각) 목록. 원화(KRW)는 시세가 필요 없다.
 export function priceQueries(groups: GroupView[]): { symbol: string; time: number }[] {
   const out = new Map<string, { symbol: string; time: number }>();
   for (const g of groups) {
     if (!VALUED.includes(g.classification.category)) continue;
     for (const [pool] of netsOf(g)) out.set(priceKey(pool, g.time), { symbol: pool, time: g.time });
+    for (const [code] of fiatNetsOf(g)) if (code !== "KRW") out.set(priceKey(code, g.time), { symbol: code, time: g.time });
   }
   return [...out.values()];
 }
@@ -53,6 +70,14 @@ export interface BuildEventsResult {
   pools: Set<string>;
 }
 
+const sum = (vs: (Decimal | null)[]) => vs.reduce<Decimal>((s, v) => (v ? s.plus(v) : s), new Decimal(0));
+
+// 총액을 각 항목의 시가 비율로 나눈다 (시가를 모르면 균등하게)
+function allocate(total: Decimal, own: (Decimal | null)[]) {
+  const ownSum = sum(own);
+  return own.every((v) => v) && ownSum.gt(0) ? own.map((v) => total.mul(v!).div(ownSum)) : own.map(() => total.div(own.length));
+}
+
 export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal | null>): BuildEventsResult {
   const events: TaxEvent[] = [];
   const unresolved: Unresolved[] = [];
@@ -63,9 +88,10 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
     const { category, status, decision, reason } = g.classification;
     if (category === "spam") continue;
 
-    // 수수료는 모든 분류에서 동일하게 처리한다 (정책: 즉시 손실 인식)
+    // 가상자산으로 낸 수수료는 모든 분류에서 동일하게 처리한다 (정책: 즉시 손실 인식).
+    // 법정화폐 수수료는 원화 매수·매도의 취득가·양도가에 반영한다.
     for (const e of g.entries) {
-      if (e.kind !== "fee") continue;
+      if (e.kind !== "fee" || isFiatEntry(e)) continue;
       const pool = poolOf(e.asset);
       pools.add(pool);
       events.push({ type: "fee", time: e.time, asset: pool, qty: new Decimal(e.amount).abs(), ref: e.id });
@@ -73,7 +99,7 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
 
     const nets = netsOf(g);
     nets.forEach(([p]) => pools.add(p));
-    const priceOf = (pool: string) => prices.get(priceKey(pool, g.time)) ?? null;
+    const priceOf = (sym: string) => prices.get(priceKey(sym, g.time)) ?? null;
     const valueOf = (pool: string, qty: Decimal) => {
       const p = priceOf(pool);
       return p ? qty.abs().mul(p) : null;
@@ -103,14 +129,6 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
         const ins = nets.filter(([, q]) => q.isPositive());
         const outVals = outs.map(([p, q]) => valueOf(p, q));
         const inVals = ins.map(([p, q]) => valueOf(p, q));
-        const sum = (vs: (Decimal | null)[]) => vs.reduce<Decimal>((s, v) => (v ? s.plus(v) : s), new Decimal(0));
-        // 총액을 각 항목의 시가 비율로 나눈다 (시가를 모르면 균등하게)
-        const allocate = (total: Decimal, own: (Decimal | null)[]) => {
-          const ownSum = sum(own);
-          return own.every((v) => v) && ownSum.gt(0)
-            ? own.map((v) => total.mul(v!).div(ownSum))
-            : own.map(() => total.div(own.length));
-        };
         const priced = (vals: (Decimal | null)[]) => vals.length > 0 && vals.every((v) => v !== null);
         const allStable = (legs: [string, Decimal][]) => legs.length > 0 && legs.every(([p]) => STABLECOINS.has(p));
 
@@ -139,6 +157,34 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
         });
         break;
       }
+      case "buy_fiat":
+      case "sell_fiat": {
+        // 실제 거래가액: 지불·수령한 법정화폐를 원화로 환산 (수수료 포함). 원화는 그대로.
+        let fiatKrw: Decimal | null = new Decimal(0);
+        for (const [code, q] of fiatNetsOf(g)) {
+          const rate = code === "KRW" ? new Decimal(1) : priceOf(code);
+          if (!rate) {
+            missingPrice(code);
+            fiatKrw = null;
+            break;
+          }
+          fiatKrw = fiatKrw!.plus(q.mul(rate));
+        }
+        const outs = nets.filter(([, q]) => q.isNegative());
+        const ins = nets.filter(([, q]) => q.isPositive());
+        if (category === "buy_fiat") {
+          const paid = fiatKrw ? fiatKrw.neg() : null; // 법정화폐 순유출 = 취득가
+          const alloc = paid ? allocate(paid, ins.map(([p, q]) => valueOf(p, q))) : ins.map(() => null);
+          ins.forEach(([p, q], i) => acquire(p, q, alloc[i] ?? new Decimal(0)));
+          outs.forEach(([p, q]) => dispose(p, q, valueOf(p, q) ?? new Decimal(0)));
+        } else {
+          const received = fiatKrw; // 법정화폐 순유입 (수수료 차감 후) = 양도가
+          const alloc = received ? allocate(received, outs.map(([p, q]) => valueOf(p, q))) : outs.map(() => null);
+          outs.forEach(([p, q], i) => dispose(p, q, alloc[i] ?? new Decimal(0)));
+          ins.forEach(([p, q]) => acquire(p, q, valueOf(p, q) ?? new Decimal(0)));
+        }
+        break;
+      }
       case "external_out":
       case "external_in": {
         const ins = nets.filter(([, q]) => q.isPositive());
@@ -158,10 +204,10 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
       }
       case "reward":
       case "airdrop":
-        // 정책: 취득가 0원
+        // 정책: 취득가 0원 (팔 때 과세)
         for (const [p, q] of nets) if (q.isPositive()) acquire(p, q, new Decimal(0));
         break;
-      // internal_transfer, wrap, fee_only: 수수료 외 과세 없음
+      // internal_transfer, wrap, fee_only, fiat_transfer: 수수료 외 과세 없음
       // unknown, defi_unsupported: 해석하지 못해 계산에서 제외 (unresolved로 표시됨)
       default:
         break;

@@ -127,6 +127,30 @@ describe("buildTaxEvents", () => {
     ]);
   });
 
+  it("원화 매수: 지불한 원화 + 원화 수수료가 취득가다 (시세와 무관)", () => {
+    const krw = (amount: string, kind: LedgerEntry["kind"] = "trade") => leg("KRW", amount, { assetKey: "fiat:KRW", kind, origin: "exchange" });
+    const r = buildTaxEvents(
+      [group("buy_fiat", [krw("-10000000"), krw("-5000", "fee"), leg("BTC", "0.1", { origin: "exchange" })])],
+      prices({ BTC: "120000000" }), // 시가로는 12,000,000원이지만 실제 지불액을 쓴다
+    );
+    expect(brief(r)).toEqual([["acquire", "BTC", "0.1", "10005000"]]);
+    expect(r.pools.has("KRW")).toBe(false);
+  });
+
+  it("원화 매도: 받은 원화에서 원화 수수료를 뺀 금액이 양도가다", () => {
+    const krw = (amount: string, kind: LedgerEntry["kind"] = "trade") => leg("KRW", amount, { assetKey: "fiat:KRW", kind, origin: "exchange" });
+    const r = buildTaxEvents([group("sell_fiat", [leg("BTC", "-0.1"), krw("12000000"), krw("-6000", "fee")])], new Map());
+    expect(brief(r)).toEqual([["dispose", "BTC", "0.1", "11994000"]]);
+  });
+
+  it("달러 매수는 원/달러 환율로 환산하고, 환율이 없으면 표시한다", () => {
+    const usd = (amount: string) => leg("USD", amount, { assetKey: "fiat:USD", origin: "exchange" });
+    const withRate = buildTaxEvents([group("buy_fiat", [usd("-1000"), leg("ETH", "0.3")])], prices({ USD: "1400" }));
+    expect(brief(withRate)).toEqual([["acquire", "ETH", "0.3", "1400000"]]);
+    const noRate = buildTaxEvents([group("buy_fiat", [usd("-1000"), leg("ETH", "0.3")])], new Map());
+    expect(noRate.unpriced.map((u) => u.pool)).toEqual(["USD"]);
+  });
+
   it("시세가 필요한 것은 교환·외부 입출금뿐이다", () => {
     const q = priceQueries([
       group("trade", [leg("USDC", "-1"), leg("ETH", "1")]),

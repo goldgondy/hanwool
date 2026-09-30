@@ -3,7 +3,9 @@ import type { LedgerEntry } from "@/lib/db";
 import type { Classification, Decision } from "./types";
 
 // 원장 + 사용자 결정 → 그룹별 분류. 규칙 번호는 docs/classification.md §5와 같다.
-// 거래소 체결·보상 기록(R1–R3), 브릿지(R8), 해시 없는 매칭(R11)은 해당 데이터가 생기면 추가한다.
+// 브릿지(R8), 해시 없는 매칭(R11)은 해당 데이터가 생기면 추가한다.
+
+const isFiatKey = (assetKey: string) => assetKey.startsWith("fiat:");
 
 // 네이티브 코인 래핑 컨트랙트 (소문자). assetKey 형식: `${chain}:${contract}`
 export const WRAPPED_NATIVE = new Set([
@@ -36,6 +38,28 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
   // R6: 수수료만
   if (legs.length === 0) {
     return { ...base, category: "fee_only", status: "confirmed", rule: "R6", reason: "수수료만 지불한 거래 (approve, 실패, UTXO 통합 등)" };
+  }
+
+  // R1–R3: 거래소가 남긴 체결·보상 기록은 추정이 아니므로 확정한다.
+  if (entries.every((e) => e.origin === "exchange")) {
+    if (legs.some((e) => e.tag === "airdrop")) {
+      return { ...base, category: "airdrop", status: "confirmed", rule: "R3", reason: "거래소 에어드랍 기록" };
+    }
+    if (legs.some((e) => e.tag === "reward")) {
+      return { ...base, category: "reward", status: "confirmed", rule: "R3", reason: "거래소 보상·이자 기록" };
+    }
+    if (legs.some((e) => e.kind === "trade")) {
+      const fiatOut = legs.some((e) => isFiatKey(e.assetKey) && e.amount.startsWith("-"));
+      const fiatIn = legs.some((e) => isFiatKey(e.assetKey) && !e.amount.startsWith("-"));
+      if (fiatOut && !fiatIn) return { ...base, category: "buy_fiat", status: "confirmed", rule: "R2", reason: "거래소 법정화폐 매수 체결" };
+      if (fiatIn && !fiatOut) return { ...base, category: "sell_fiat", status: "confirmed", rule: "R2", reason: "거래소 법정화폐 매도 체결" };
+      return { ...base, category: "trade", status: "confirmed", rule: "R1", reason: "거래소 체결 기록" };
+    }
+  }
+
+  // 법정화폐만 오가는 입출금 (예: 업비트 원화 입금) → 과세 대상 아님
+  if (legs.every((e) => isFiatKey(e.assetKey))) {
+    return { ...base, category: "fiat_transfer", status: "confirmed", rule: "R0", reason: "원화·법정화폐 입출금" };
   }
 
   // R4: 수수료 외 항목이 자산별로 합계 0 → 내 계정 사이에서만 움직임
@@ -89,8 +113,9 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
     const selfSent =
       outs.length === 0 &&
       ins.every((e) => {
+        // 컨트랙트 주소가 있는 토큰(EVM)만 해당한다. 거래소 기록처럼 주소가 없으면 적용하지 않는다.
         const contract = e.assetKey.split(":")[1];
-        return contract !== "native" && norm(e.counterparty) === contract;
+        return !!contract?.startsWith("0x") && !!e.counterparty && norm(e.counterparty) === contract;
       });
     if (selfSent) {
       return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "토큰 컨트랙트가 직접 보낸 토큰 (스팸 의심)" };
