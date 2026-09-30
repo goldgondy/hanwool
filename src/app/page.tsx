@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useSyncExternalStore } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db } from "@/lib/db";
+import { db, isExchangeKind } from "@/lib/db";
 import { takeSnapshot } from "@/lib/snapshot";
 import { DEEMED_COST_DEADLINE, formatDateTime, formatKrw } from "@/lib/format";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
@@ -43,7 +43,7 @@ export default function Home() {
 
   const unlocked = useVaultUnlocked();
   const noSources = sources !== undefined && sources.length === 0;
-  const hasExchange = sources?.some((s) => s.kind === "binance" || s.kind === "okx") ?? false;
+  const hasExchange = sources?.some((s) => isExchangeKind(s.kind)) ?? false;
   const needsUnlock = hasExchange && !unlocked;
 
   return (

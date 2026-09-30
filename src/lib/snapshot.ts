@@ -1,8 +1,9 @@
 import Decimal from "@/lib/decimal";
-import { db, type Holding, type Snapshot } from "@/lib/db";
+import { db, isExchangeKind, type Holding, type Snapshot } from "@/lib/db";
 import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
+import { fetchXapiBalances } from "@/lib/sources/exchanges";
 import { fetchOkxBalances } from "@/lib/sources/okx";
 import type { RawBalance } from "@/lib/sources/types";
 import { isUnlocked } from "@/lib/vault";
@@ -38,7 +39,7 @@ async function ledgerBalances(sourceId: string, label: string): Promise<RawBalan
 export async function takeSnapshot(note?: string): Promise<Snapshot> {
   const sources = await db.sources.toArray();
 
-  if (sources.some((s) => s.kind === "binance" || s.kind === "okx") && !isUnlocked()) {
+  if (sources.some((s) => isExchangeKind(s.kind)) && !isUnlocked()) {
     throw new Error("거래소 키를 쓰려면 먼저 잠금을 해제하세요");
   }
 
@@ -55,6 +56,8 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           );
         } else if (s.kind === "okx") {
           balances = await fetchOkxBalances(s);
+        } else if (s.kind === "xapi") {
+          balances = await fetchXapiBalances(s, (message) => errors.push({ sourceLabel: s.label, message }));
         } else if (s.kind === "btc") {
           balances = await fetchBtcBalances(s);
         } else if (s.kind === "csv") {

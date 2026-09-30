@@ -108,7 +108,7 @@ export function lockVault() {
 // 비밀번호를 잊었을 때: 암호화된 거래소 키를 모두 삭제하고 초기화한다.
 export async function resetVault() {
   await db.transaction("rw", db.sources, db.settings, async () => {
-    await db.sources.where("kind").anyOf("binance", "okx").delete();
+    await db.sources.where("kind").anyOf("binance", "okx", "xapi").delete();
     await db.settings.bulkDelete(["vaultSalt", "vaultCheck"]);
   });
   lockVault();

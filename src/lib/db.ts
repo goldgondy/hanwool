@@ -3,7 +3,7 @@ import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "evm" | "btc" | "csv";
+export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "csv";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -60,8 +60,21 @@ export interface CsvSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | EvmSource | BtcSource | CsvSource;
-export type ExchangeSource = BinanceSource | OkxSource;
+// 그 밖의 거래소 API 계정 (바이비트, 비트겟, MEXC, 게이트). lib/sources/exchanges.ts
+export interface XapiSource {
+  id: string;
+  kind: "xapi";
+  exchange: "bybit" | "bitget" | "mexc" | "gate";
+  label: string;
+  apiKey: string;
+  encSecret: EncryptedBlob;
+  encPassphrase?: EncryptedBlob; // 비트겟
+  createdAt: number;
+}
+
+export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | CsvSource;
+export type ExchangeSource = BinanceSource | OkxSource | XapiSource;
+export const isExchangeKind = (kind: SourceKind) => kind === "binance" || kind === "okx" || kind === "xapi";
 
 export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon";
 

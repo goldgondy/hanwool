@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type CsvSource, type EvmChain } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
+import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { EVM_CHAINS } from "@/lib/sources/evm";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
@@ -119,7 +120,67 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", evm: "EVM", btc: "Bitcoin", csv: "CSV" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", csv: "CSV" } as const;
+
+function XapiForm() {
+  const unlocked = useVaultUnlocked();
+  const [exchange, setExchange] = useState<ApiExchange>("bybit");
+  const [label, setLabel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [dup, setDup] = useState(false);
+  const info = API_EXCHANGES[exchange];
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    const exists = (await db.sources.toArray()).some((s) => s.kind === "xapi" && s.exchange === exchange && s.apiKey === apiKey.trim());
+    setDup(exists);
+    if (exists) return;
+    await db.sources.add({
+      id: crypto.randomUUID(),
+      kind: "xapi",
+      exchange,
+      label: label.trim() || info.name,
+      apiKey: apiKey.trim(),
+      encSecret: await encrypt(apiSecret.trim()),
+      encPassphrase: info.needsPassphrase ? await encrypt(passphrase) : undefined,
+      createdAt: Date.now(),
+    });
+    setApiKey("");
+    setApiSecret("");
+    setPassphrase("");
+    setLabel("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">그 밖의 거래소 API 키</h3>
+      <select className={input} value={exchange} onChange={(e) => setExchange(e.target.value as ApiExchange)}>
+        {(Object.keys(API_EXCHANGES) as ApiExchange[]).map((x) => (
+          <option key={x} value={x}>
+            {API_EXCHANGES[x].name}
+          </option>
+        ))}
+      </select>
+      <p className="text-xs leading-5 text-stone-500">
+        {info.keyHelp}. Secret은 암호화되어 이 브라우저에만 저장되고, 요청 서명도 브라우저에서 합니다.{" "}
+        <span className="text-amber-700 dark:text-amber-400">실제 키로 검증 전인 연결입니다.</span>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`이름 (기본: ${info.name})`} />
+      <input className={input} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key" required />
+      <input className={input} type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} placeholder="Secret Key" required />
+      {info.needsPassphrase && (
+        <input className={input} type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Passphrase" required />
+      )}
+      <LockedHint unlocked={unlocked} />
+      {dup && <p className="text-xs text-red-600">이미 등록된 API 키입니다.</p>}
+      <button className={button} disabled={!unlocked}>
+        추가
+      </button>
+    </form>
+  );
+}
 
 interface CsvPreview {
   fileName: string;
@@ -485,7 +546,9 @@ export default function SourcesPage() {
                     ? `${mask(s.input)} · ${new URL(s.esploraUrl).host}`
                     : s.kind === "csv"
                       ? `파일 ${s.imports.length}개 가져옴`
-                      : mask(s.apiKey)}
+                      : s.kind === "xapi"
+                        ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
+                        : mask(s.apiKey)}
               </code>
               <button
                 onClick={() => removeSource(s.id)}
@@ -504,6 +567,7 @@ export default function SourcesPage() {
         <CsvImportCard />
         <BinanceForm />
         <OkxForm />
+        <XapiForm />
       </div>
     </div>
   );
