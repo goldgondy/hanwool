@@ -25,7 +25,7 @@ const RELAYS: Record<string, RelayConfig> = {
   },
   bitget: {
     host: "https://api.bitget.com",
-    paths: ["/api/v2/spot/account/assets"],
+    paths: ["/api/v2/spot/account/assets", "/api/v2/spot/account/bills", "/api/v2/spot/wallet/deposit-records", "/api/v2/spot/wallet/withdrawal-records"],
     headers: ["ACCESS-KEY", "ACCESS-SIGN", "ACCESS-TIMESTAMP", "ACCESS-PASSPHRASE"],
   },
   mexc: {
