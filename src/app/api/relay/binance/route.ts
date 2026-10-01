@@ -16,6 +16,19 @@ const ALLOWED: Record<string, { host: string; method: "GET" | "POST" }> = {
   "/sapi/v1/margin/account": { host: SPOT, method: "GET" },
   "/fapi/v3/balance": { host: USDM, method: "GET" },
   "/dapi/v1/balance": { host: COINM, method: "GET" },
+  // 거래 내역 (lib/ledger/binance-sync.ts)
+  "/api/v3/myTrades": { host: SPOT, method: "GET" },
+  "/sapi/v1/capital/deposit/hisrec": { host: SPOT, method: "GET" },
+  "/sapi/v1/capital/withdraw/history": { host: SPOT, method: "GET" },
+  "/sapi/v1/convert/tradeFlow": { host: SPOT, method: "GET" },
+  "/sapi/v1/asset/dribblet": { host: SPOT, method: "GET" },
+  "/sapi/v1/asset/assetDividend": { host: SPOT, method: "GET" },
+  "/sapi/v1/simple-earn/flexible/history/rewardsRecord": { host: SPOT, method: "GET" },
+  "/sapi/v1/simple-earn/locked/history/rewardsRecord": { host: SPOT, method: "GET" },
+  "/sapi/v1/pay/transactions": { host: SPOT, method: "GET" },
+  "/sapi/v1/c2c/orderMatch/listUserOrderHistory": { host: SPOT, method: "GET" },
+  "/fapi/v1/income": { host: USDM, method: "GET" },
+  "/dapi/v1/income": { host: COINM, method: "GET" },
 };
 
 export async function POST(request: Request) {

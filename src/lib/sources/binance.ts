@@ -18,10 +18,10 @@ async function hmacSha256Hex(secret: string, message: string) {
     .join("");
 }
 
-type Call = <T>(path: string, params?: Record<string, string>) => Promise<T>;
+export type Call = <T>(path: string, params?: Record<string, string>) => Promise<T>;
 
 // 서명은 브라우저에서 수행하고, 서명된 쿼리만 중계 서버로 보낸다.
-function makeCall(apiKey: string, secret: string): Call {
+export function makeCall(apiKey: string, secret: string): Call {
   return async <T>(path: string, params: Record<string, string> = {}) => {
     const qs = new URLSearchParams({
       ...params,
@@ -37,7 +37,9 @@ function makeCall(apiKey: string, secret: string): Call {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data?.msg ?? data?.error ?? `HTTP ${res.status}`);
+      const err = new Error(data?.msg ?? data?.error ?? `HTTP ${res.status}`) as Error & { code?: number };
+      err.code = data?.code; // 예: -1121 존재하지 않는 거래쌍
+      throw err;
     }
     return data as T;
   };

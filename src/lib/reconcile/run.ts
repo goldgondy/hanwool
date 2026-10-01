@@ -4,6 +4,7 @@ import { db, getSetting, isExchangeKind, setSetting, type LedgerEntry, type Reco
 import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
 import { applyCsvCoverage } from "@/lib/ledger/dedup";
 import { syncEvmHistory } from "@/lib/ledger/evm-sync";
+import { syncBinanceHistory } from "@/lib/ledger/binance-sync";
 import { syncOkxHistory } from "@/lib/ledger/okx-sync";
 import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync";
 import { fetchTronBalances, syncTronHistory } from "@/lib/ledger/tron-sync";
@@ -49,6 +50,7 @@ async function syncBeforeReconcile(sources: LiveSource[], onProgress: (msg: stri
       else if (s.kind === "solana") await syncSolanaHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "xapi" && HISTORY_SUPPORTED.has(s.exchange) && isUnlocked()) await syncXapiHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "okx" && isUnlocked()) await syncOkxHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+      else if (s.kind === "binance" && isUnlocked()) await syncBinanceHistory(s, (m) => onProgress(`${s.label}: ${m}`));
     } catch (e) {
       errors.set(s.id, `내역 동기화 실패 (오래된 원장으로 대사함): ${e instanceof Error ? e.message : e}`);
     }

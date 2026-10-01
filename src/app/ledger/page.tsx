@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type OkxSource, type SolanaSource, type TronSource, type XapiSource } from "@/lib/db";
+import { db, type BinanceSource, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type OkxSource, type SolanaSource, type TronSource, type XapiSource } from "@/lib/db";
 import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync";
 import { syncOkxHistory } from "@/lib/ledger/okx-sync";
+import { syncBinanceHistory } from "@/lib/ledger/binance-sync";
+import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchOkxBalances } from "@/lib/sources/okx";
 import { fetchTronBalances, syncTronHistory } from "@/lib/ledger/tron-sync";
 import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
@@ -17,8 +19,8 @@ import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
 
-type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource | OkxSource;
-type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource | OkxSource;
+type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource | OkxSource | BinanceSource;
+type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource | OkxSource | BinanceSource;
 
 // 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
 interface SyncLine {
@@ -38,6 +40,10 @@ async function syncSource(source: SyncableSource, onProgress: (msg: string) => v
   if (source.kind === "solana") {
     const r = await syncSolanaHistory(source, onProgress);
     return [{ title: "Solana", summary: `새 항목 ${r.added}건 반영`, notes: r.warnings }];
+  }
+  if (source.kind === "binance") {
+    const r = await syncBinanceHistory(source, onProgress);
+    return [{ title: "Binance", summary: `새 항목 ${r.added}건 반영`, notes: r.warnings }];
   }
   if (source.kind === "okx") {
     const r = await syncOkxHistory(source, onProgress);
@@ -70,6 +76,7 @@ async function syncSource(source: SyncableSource, onProgress: (msg: string) => v
 function fetchBalances(source: SyncableSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
   if (source.kind === "xapi") return fetchXapiBalances(source);
   if (source.kind === "okx") return fetchOkxBalances(source);
+  if (source.kind === "binance") return fetchBinanceBalances(source, () => {});
   if (source.kind === "tron") return fetchTronBalances(source);
   if (source.kind === "solana") return fetchSolanaBalances(source);
   return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
@@ -228,7 +235,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          {(source.kind === "xapi" || source.kind === "okx") && (
+          {(source.kind === "xapi" || source.kind === "okx" || source.kind === "binance") && (
             <div className="w-full">
               <VaultPanel />
             </div>
@@ -331,7 +338,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
   const wallets = (sources ?? []).filter(
-    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "csv" || s.kind === "xapi" || s.kind === "okx",
+    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "csv" || s.kind === "xapi" || s.kind === "okx" || s.kind === "binance",
   );
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
@@ -341,7 +348,7 @@ export default function LedgerPage() {
       <div>
         <h2 className="text-lg font-semibold">원장</h2>
         <p className="text-sm text-stone-500">
-          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 지갑(비트코인·EVM·트론·솔라나)과 거래소 API(OKX·바이비트·코인베이스·비트겟·게이트·MEXC),
+          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 지갑(비트코인·EVM·트론·솔라나)과 거래소 API(바이낸스·OKX·바이비트·코인베이스·비트겟·게이트·MEXC),
           거래소 CSV를 지원합니다.
         </p>
       </div>
@@ -362,7 +369,7 @@ export default function LedgerPage() {
                   : "border-stone-300 dark:border-stone-700"
               }`}
             >
-              {s.label} {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" || s.kind === "okx" ? "API" : "CSV"}
+              {s.label} {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" || s.kind === "okx" || s.kind === "binance" ? "API" : "CSV"}
             </button>
           ))}
         </div>
