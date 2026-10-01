@@ -15,7 +15,7 @@
 | 비트겟 | 장부 size의 수수료 포함 방식(자동 판별 결과 `convention`), bizOrderId ↔ 입출금 orderId 연결, 통합 계정(UTA) 사용자도 v2 API가 되는지 (안 되면 /api/v3/account/financial-records로 전환). 선물: 잔고 변동 = amount + fee 인지, 선물 잔고 = accountEquity − unrealizedPL 인지. Earn: 이자가 현물로 지급될 때 중복 제거가 맞는지, Earn 가입·환매가 현물 장부에 어떤 유형으로 찍히는지 | `src/lib/ledger/bitget-build.ts`, `bitget-sync.ts` |
 | 게이트 | 장부 유형(type) 실제 값과 분류, new_order 등 주문 잠금이 잔고 변동으로 잡히는지. 선물 장부 페이지 넘김(offset)과 기간 제한, 선물 잔고 total에 미실현 손익이 빠지는지. 심플 언 잔고로 amount가 맞는지(current_amount와 비교) | `src/lib/ledger/gate-build.ts`, `gate-sync.ts` |
 | MEXC | 거래쌍 추정(USDT·USDC)으로 빠지는 체결이 없는지, 출금 금액에 수수료 포함 여부. 선물: 서명 방식(가짜 키로는 "Internal error"만 와서 미확인), realised에 펀딩비 포함 여부, 선물 잔고 = equity − unrealized 인지 | `src/lib/ledger/mexc-build.ts`, `mexc-sync.ts` |
-| 바이낸스 | 체결 거래쌍 추정(코인 × USDT·FDUSD·USDC·BTC·ETH·BNB)으로 빠지는 체결이 없는지, 출금 amount에 수수료 미포함이 맞는지, 소액 전환 transferedAmount가 수수료 전 금액인지, Simple Earn 이자와 배당(assetDividend) 중복 제거, P2P 응답 형식(data·commission)과 조회 기간 제한, Pay 응답 형식, 마진 계정(잔고에는 포함·내역은 미포함) 차이 | `src/lib/ledger/binance-build.ts`, `binance-sync.ts` |
+| 바이낸스 | 체결 거래쌍 추정(코인 × USDT·FDUSD·USDC·BTC·ETH·BNB)으로 빠지는 체결이 없는지, 출금 amount에 수수료 미포함이 맞는지, 소액 전환 transferedAmount가 수수료 전 금액인지, Simple Earn 이자와 배당(assetDividend) 중복 제거, P2P 응답 형식(data·commission)과 조회 기간 제한, Pay 응답 형식, 자동 투자 수수료가 지불 금액과 별도인지, 카드 결제 응답 형식, 마진 이자 중 BNB로 낸 이자(_CONVERTED 유형)의 실제 차감 코인, 듀얼 인베스트먼트 만기 결과 추정(만기 직전 1분 종가 vs 바이낸스 정산가, 연이율 표기 0.2 = 20% 여부) | `src/lib/ledger/binance-build.ts`, `binance-sync.ts` |
 | 바이비트 | 펀딩 계정 Convert·Earn 기록 | `src/lib/ledger/bybit-build.ts` |
 
 선물·Earn은 거래소 전체를 한 계좌로 보고(현물 + 선물 + Earn) 그 사이 이동을 원장에서 뺀다. 아직 포함하지 않는 계정: 마진·카피 트레이딩·봇·P2P (비트겟·게이트), 코인 마진 선물 (게이트), Earn (MEXC는 API 없음).
