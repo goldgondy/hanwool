@@ -286,6 +286,185 @@ export function buildBinancePay(sourceId: string, rows: BinancePay[]): LedgerEnt
     );
 }
 
+// ── 자동 투자 (/sapi/v1/lending/auto-invest/history/list) ──
+// 산 코인은 현물 또는 유연 Earn으로 들어가며 둘 다 잔고 대조에 포함된다. 수수료는 지불 금액과 별도로 본다 (⚠ 실제 키로 확인 필요).
+export interface BinanceAutoInvest {
+  id: string | number;
+  transactionDateTime: number;
+  transactionStatus: string;
+  sourceAsset: string;
+  sourceAssetAmount: string;
+  targetAsset: string;
+  targetAssetAmount: string;
+  transactionFee?: string;
+  transactionFeeUnit?: string;
+}
+
+export function buildBinanceAutoInvest(sourceId: string, rows: BinanceAutoInvest[]): LedgerEntry[] {
+  const b: Base = { sourceId, origin: "exchange" };
+  const out: LedgerEntry[] = [];
+  for (const r of rows) {
+    if (r.transactionStatus !== "SUCCESS") continue;
+    const id = `${sourceId}:bn:ai:${r.id}`;
+    const common = { location: "Binance 자동 투자", time: r.transactionDateTime, groupId: `bn:ai:${r.id}`, rawType: "Auto-Invest" };
+    out.push(
+      entry(b, { ...common, id: `${id}:from`, asset: r.sourceAsset, amount: new Decimal(r.sourceAssetAmount).neg().toString(), kind: "trade" }),
+      entry(b, { ...common, id: `${id}:to`, asset: r.targetAsset, amount: new Decimal(r.targetAssetAmount).toString(), kind: "trade" }),
+    );
+    const fee = new Decimal(r.transactionFee || 0);
+    if (!fee.isZero()) out.push(entry(b, { ...common, id: `${id}:fee`, asset: r.transactionFeeUnit || r.sourceAsset, amount: fee.abs().neg().toString(), kind: "fee" }));
+  }
+  return out;
+}
+
+// ── 카드·법정화폐 결제로 코인 매수·매도 (/sapi/v1/fiat/payments) ──
+// 법정화폐는 카드·은행에서 오가므로 P2P와 같이 '결제' 두 줄로 넣는다. 결제 금액(sourceAmount)에는 수수료(totalFee)가 포함된다.
+export interface BinanceFiatPayment {
+  orderNo: string;
+  sourceAmount: string;
+  fiatCurrency: string;
+  obtainAmount: string;
+  cryptoCurrency: string;
+  totalFee?: string;
+  status: string;
+  paymentMethod?: string;
+  createTime: number;
+  side: "BUY" | "SELL"; // 요청한 transactionType (0 = 매수, 1 = 매도)
+}
+
+export function buildBinanceFiatPayments(sourceId: string, rows: BinanceFiatPayment[]): LedgerEntry[] {
+  const b: Base = { sourceId, origin: "exchange" };
+  const out: LedgerEntry[] = [];
+  for (const r of rows) {
+    if (!/^completed$/i.test(r.status)) continue;
+    const buy = r.side === "BUY";
+    const groupId = `bn:fiat:${r.orderNo}`;
+    const id = `${sourceId}:bn:fiat:${r.orderNo}`;
+    const common = { location: "Binance 현물", time: r.createTime, groupId, rawType: `${buy ? "Buy" : "Sell"} crypto (${r.paymentMethod ?? "card"})` };
+    // 매수: 법정화폐 sourceAmount를 내고 코인 obtainAmount를 받음. 매도: 코인 sourceAmount를 내고 법정화폐 obtainAmount를 받음.
+    const coin = buy ? new Decimal(r.obtainAmount) : new Decimal(r.sourceAmount).neg();
+    const fiat = buy ? new Decimal(r.sourceAmount).neg() : new Decimal(r.obtainAmount);
+    out.push(
+      entry(b, { ...common, id: `${id}:coin`, asset: r.cryptoCurrency, amount: coin.toString(), kind: "trade" }),
+      entry(b, { ...common, id: `${id}:fiat`, asset: r.fiatCurrency, assetKey: fiatAssetKey(r.fiatCurrency), amount: fiat.toString(), kind: "trade" }),
+      entry(b, {
+        ...common,
+        id: `${id}:bank`,
+        location: "Binance 결제 수단",
+        asset: r.fiatCurrency,
+        assetKey: fiatAssetKey(r.fiatCurrency),
+        amount: fiat.neg().toString(),
+        kind: "transfer",
+        groupId: `${groupId}:bank`,
+      }),
+    );
+  }
+  return out;
+}
+
+// ── 교차 마진 ──
+// 순자산(보유 − 빌린 것 − 이자) 기준: 빌리기·갚기는 순자산을 바꾸지 않아 기록하지 않고, 체결과 대출 이자만 기록한다.
+// 잔고 조회도 교차 마진은 순자산(netAsset)을 쓴다. 과세 방식은 검토 항목 #13 (그때까지 미분류).
+export interface BinanceMarginInterest {
+  asset: string;
+  interest: string;
+  interestAccuredTime: number;
+  type?: string;
+}
+
+export function buildBinanceMargin(sourceId: string, trades: { base: string; quote: string; trade: BinanceTrade }[], interest: BinanceMarginInterest[]): LedgerEntry[] {
+  const b: Base = { sourceId, origin: "exchange" };
+  const out: LedgerEntry[] = [];
+  for (const e of buildBinanceTrades(sourceId, trades)) {
+    out.push({ ...e, id: e.id.replace(":bn:t:", ":bn:mt:"), location: "Binance Cross Margin", kind: "other", groupId: e.groupId.replace("bn:ord:", "bn:mord:"), rawType: `margin ${e.rawType}` });
+  }
+  for (const r of interest) {
+    const amount = new Decimal(r.interest || 0);
+    if (amount.isZero()) continue;
+    const key = `${r.asset}:${r.interestAccuredTime}:${r.type ?? ""}`;
+    out.push(
+      entry(b, {
+        id: `${sourceId}:bn:mint:${key}`,
+        location: "Binance Cross Margin",
+        time: r.interestAccuredTime,
+        asset: r.asset,
+        amount: amount.abs().neg().toString(),
+        kind: "other",
+        groupId: `bn:mint:${key}`,
+        rawType: `margin interest${r.type ? ` (${r.type})` : ""}`,
+      }),
+    );
+  }
+  return out;
+}
+
+// ── 듀얼 인베스트먼트 (/sapi/v1/dci/product/positions) ──
+// API가 만기 결과(받은 코인·금액)를 주지 않아, 만기 시각의 시세와 목표가로 결과를 추정한다 (검토 항목 #14).
+// - 높게 팔기(CALL, 코인 예치): 만기가 ≥ 목표가면 결제 코인(USDT 등)으로 바뀜
+// - 낮게 사기(PUT, 스테이블코인 예치): 만기가 ≤ 목표가면 코인으로 바뀜
+// 받는 금액 = 예치액(바뀐 경우 목표가로 환산) × (1 + 연이율 × 기간/365)
+export interface BinanceDualPosition {
+  id: string;
+  investCoin: string;
+  exercisedCoin: string;
+  subscriptionAmount: string;
+  strikePrice: string;
+  duration: number; // 일
+  settleDate: number;
+  purchaseStatus: string;
+  apr: string; // 연이율 (0.2 = 20%)
+  optionType: string; // CALL | PUT
+  subscriptionTime?: number;
+  purchaseEndTime?: number;
+}
+
+export function dualPayout(p: BinanceDualPosition, settlePrice: Decimal) {
+  const amount = new Decimal(p.subscriptionAmount);
+  const strike = new Decimal(p.strikePrice);
+  const growth = new Decimal(1).plus(new Decimal(p.apr || 0).mul(p.duration || 0).div(365));
+  const call = p.optionType.toUpperCase() === "CALL";
+  const exercised = call ? settlePrice.gte(strike) : settlePrice.lte(strike);
+  if (!exercised) return { coin: p.investCoin, amount: amount.mul(growth), exercised };
+  return { coin: p.exercisedCoin, amount: (call ? amount.mul(strike) : amount.div(strike)).mul(growth), exercised };
+}
+
+// 시세가 필요한 코인: 스테이블코인이 아닌 쪽 (높게 팔기는 예치 코인, 낮게 사기는 바뀌는 코인)
+export const dualPriceCoin = (p: BinanceDualPosition) => (p.optionType.toUpperCase() === "CALL" ? p.investCoin : p.exercisedCoin);
+
+export function buildBinanceDualInvestment(sourceId: string, positions: BinanceDualPosition[], settlePrices: Map<string, Decimal>, now: number): LedgerEntry[] {
+  const b: Base = { sourceId, origin: "exchange" };
+  const out: LedgerEntry[] = [];
+  for (const p of positions) {
+    if (!["PURCHASE_SUCCESS", "SETTLING", "SETTLED"].includes(p.purchaseStatus)) continue;
+    const groupId = `bn:dci:${p.id}`;
+    const common = { location: "Binance 듀얼 인베스트먼트", groupId, kind: "other" as const };
+    out.push(
+      entry(b, {
+        ...common,
+        id: `${sourceId}:bn:dci:${p.id}:in`,
+        time: p.subscriptionTime ?? p.purchaseEndTime ?? p.settleDate,
+        asset: p.investCoin,
+        amount: new Decimal(p.subscriptionAmount).neg().toString(),
+        rawType: `Dual Investment ${p.optionType} subscribe (목표가 ${p.strikePrice})`,
+      }),
+    );
+    const price = settlePrices.get(p.id);
+    if (p.purchaseStatus !== "SETTLED" || p.settleDate > now || !price) continue;
+    const pay = dualPayout(p, price);
+    out.push(
+      entry(b, {
+        ...common,
+        id: `${sourceId}:bn:dci:${p.id}:out`,
+        time: p.settleDate,
+        asset: pay.coin,
+        amount: pay.amount.toDecimalPlaces(8, Decimal.ROUND_DOWN).toString(),
+        rawType: `Dual Investment settle (추정: 만기가 ${price.toFixed()} ${pay.exercised ? "→ 전환" : "→ 원래 코인"})`,
+      }),
+    );
+  }
+  return out;
+}
+
 // ── P2P (원화 등 법정화폐로 코인 매수·매도) ──
 // 법정화폐는 바이낸스 밖(은행)에서 오가므로 Coinbase 카드 매수와 같이 '결제' 두 줄(바깥에서 들어와 바로 지급)로 넣어 법정화폐 합계는 0으로 둔다.
 export interface BinanceP2P {

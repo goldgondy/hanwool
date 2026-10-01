@@ -1,5 +1,15 @@
+import Decimal from "@/lib/decimal";
 import { db, type BinanceSource, type LedgerEntry } from "@/lib/db";
 import {
+  buildBinanceAutoInvest,
+  buildBinanceDualInvestment,
+  buildBinanceFiatPayments,
+  buildBinanceMargin,
+  dualPriceCoin,
+  type BinanceAutoInvest,
+  type BinanceDualPosition,
+  type BinanceFiatPayment,
+  type BinanceMarginInterest,
   buildBinanceConverts,
   buildBinanceDividends,
   buildBinanceDust,
@@ -32,9 +42,22 @@ const QUOTES = ["USDT", "FDUSD", "USDC", "BTC", "ETH", "BNB"];
 interface BinanceState {
   lastTime: number; // 마지막 동기화 시각
   trades: Record<string, number>; // 거래쌍 → 마지막으로 받은 체결 ID
+  marginTrades?: Record<string, number>; // 교차 마진 거래쌍 → 마지막 체결 ID
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// 듀얼 인베스트먼트 만기 시세: 만기 직전 1분봉 종가 (바이낸스 공개 API, 브라우저에서 직접 조회 가능)
+async function settlePrice(coin: string, settleDate: number): Promise<Decimal | null> {
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${coin}USDT&interval=1m&endTime=${settleDate - 1}&limit=1`);
+    if (!res.ok) return null;
+    const rows = (await res.json()) as [number, string, string, string, string][];
+    return rows.length ? new Decimal(rows[0][4]) : null;
+  } catch {
+    return null;
+  }
+}
 
 // 바이낸스 요청 한도: 일반 조회는 간격 250ms, Convert·Pay는 계정당 1분 60회라 1.1초
 function paced(call: Call): Call & { slow: Call } {
@@ -230,7 +253,91 @@ export async function syncBinanceHistory(source: BinanceSource, onProgress: (msg
     entries.push(...buildBinanceP2P(source.id, rows));
   });
 
-  // 9) 현물 체결: 거래쌍별로 마지막 체결 ID 다음부터
+  // 9) 자동 투자 (30일 구간)
+  await section("자동 투자 내역", async () => {
+    const rows: BinanceAutoInvest[] = [];
+    await eachWindow(Math.max(from, Date.UTC(2022, 0, 1)), now, 30 * DAY, async (start, end) => {
+      onProgress(`바이낸스 자동 투자 조회 중 (${new Date(start).toISOString().slice(0, 7)})`);
+      for (let current = 1; ; current++) {
+        const r = await call<{ list?: BinanceAutoInvest[] }>("/sapi/v1/lending/auto-invest/history/list", { startTime: String(start), endTime: String(end), size: "100", current: String(current) });
+        const list = r.list ?? [];
+        rows.push(...list);
+        if (list.length < 100) break;
+      }
+    });
+    entries.push(...buildBinanceAutoInvest(source.id, rows));
+  });
+
+  // 10) 카드·법정화폐 결제 매수·매도 (90일 구간)
+  await section("카드 결제 내역", async () => {
+    const rows: BinanceFiatPayment[] = [];
+    await eachWindow(Math.max(from, Date.UTC(2019, 0, 1)), now, 90 * DAY, async (start, end) => {
+      onProgress(`바이낸스 카드 결제 조회 중 (${new Date(start).toISOString().slice(0, 7)})`);
+      for (const [transactionType, side] of [["0", "BUY"], ["1", "SELL"]] as const) {
+        for (let page = 1; ; page++) {
+          const r = await call<{ data?: Omit<BinanceFiatPayment, "side">[] }>("/sapi/v1/fiat/payments", {
+            transactionType,
+            beginTime: String(start),
+            endTime: String(end),
+            page: String(page),
+            rows: "500",
+          });
+          const list = r.data ?? [];
+          rows.push(...list.map((x) => ({ ...x, side })));
+          if (list.length < 500) break;
+        }
+      }
+    });
+    entries.push(...buildBinanceFiatPayments(source.id, rows));
+  });
+
+  // 11) 듀얼 인베스트먼트: 만기 결과는 만기 시각 시세로 추정 (검토 항목 #14)
+  let dualCount = 0;
+  await section("듀얼 인베스트먼트 내역", async () => {
+    const positions: BinanceDualPosition[] = [];
+    for (const status of ["PURCHASE_SUCCESS", "SETTLING", "SETTLED"]) {
+      for (let pageIndex = 1; ; pageIndex++) {
+        onProgress("바이낸스 듀얼 인베스트먼트 조회 중");
+        const r = await call<{ list?: BinanceDualPosition[] }>("/sapi/v1/dci/product/positions", { status, pageSize: "100", pageIndex: String(pageIndex) });
+        const list = r.list ?? [];
+        positions.push(...list);
+        if (list.length < 100) break;
+      }
+    }
+    const recent = positions.filter((p) => (p.subscriptionTime ?? p.settleDate) >= from || p.settleDate >= from);
+    const prices = new Map<string, Decimal>();
+    for (const p of recent) {
+      if (p.purchaseStatus !== "SETTLED" || p.settleDate > now) continue;
+      const price = await settlePrice(dualPriceCoin(p), p.settleDate);
+      if (price) prices.set(p.id, price);
+      else warnings.push(`듀얼 인베스트먼트 ${p.id}의 만기 시세를 찾지 못해 만기 수령분을 기록하지 못했습니다.`);
+    }
+    const built = buildBinanceDualInvestment(source.id, recent, prices, now);
+    entries.push(...built);
+    dualCount = recent.length;
+  });
+
+  // 12) 교차 마진 대출 이자 (30일 구간, 6개월 이전은 보관 기록)
+  const marginInterest: BinanceMarginInterest[] = [];
+  await section("마진 이자 내역", async () => {
+    await eachWindow(Math.max(from, Date.UTC(2019, 6, 1)), now, 30 * DAY, async (start, end) => {
+      onProgress(`바이낸스 마진 이자 조회 중 (${new Date(start).toISOString().slice(0, 7)})`);
+      for (let current = 1; ; current++) {
+        const r = await call<{ rows?: BinanceMarginInterest[] }>("/sapi/v1/margin/interestHistory", {
+          startTime: String(start),
+          endTime: String(end),
+          size: "100",
+          current: String(current),
+          ...(start < now - 180 * DAY ? { archived: "true" } : {}),
+        });
+        const list = r.rows ?? [];
+        marginInterest.push(...list);
+        if (list.length < 100) break;
+      }
+    });
+  });
+
+  // 13) 현물 체결: 거래쌍별로 마지막 체결 ID 다음부터
   // 찾아볼 코인 = 현재 잔고 + 이번에 받은 기록 + 원장(같은 계정과 연결된 CSV 포함)에 나온 코인
   const balances = await fetchBinanceBalances(source, () => {});
   for (const b of balances) coins.add(b.asset.toUpperCase()); // 유연 Earn의 LD 표기는 잔고 조회에서 이미 걸러진다
@@ -245,39 +352,64 @@ export async function syncBinanceHistory(source: BinanceSource, onProgress: (msg
     const quote = QUOTES.find((q) => symbol.endsWith(q) && symbol.length > q.length);
     if (quote && !pairs.has(symbol)) pairs.set(symbol, { base: symbol.slice(0, -quote.length), quote });
   }
-  const trades: { base: string; quote: string; trade: BinanceTrade }[] = [];
-  const lastIds = { ...state.trades };
-  let probed = 0;
-  for (const [symbol, pair] of pairs) {
-    onProgress(`바이낸스 체결 조회 중 (${++probed}/${pairs.size} 거래쌍)`);
-    let fromId = (lastIds[symbol] ?? -1) + 1;
-    for (;;) {
-      let page: BinanceTrade[];
-      try {
-        page = await call<BinanceTrade[]>("/api/v3/myTrades", { symbol, fromId: String(fromId), limit: "1000" });
-      } catch (e) {
-        if ((e as { code?: number }).code === -1121) break; // 존재하지 않는 거래쌍
-        throw e;
+  // 거래쌍별로 마지막 체결 ID 다음부터 끝까지 (현물·마진 공용)
+  const collectTrades = async (path: string, extra: Record<string, string>, lastIds: Record<string, number>, label: string, list: Map<string, { base: string; quote: string }>) => {
+    const out: { base: string; quote: string; trade: BinanceTrade }[] = [];
+    let probed = 0;
+    for (const [symbol, pair] of list) {
+      onProgress(`바이낸스 ${label} 조회 중 (${++probed}/${list.size} 거래쌍)`);
+      let fromId = (lastIds[symbol] ?? -1) + 1;
+      for (;;) {
+        let page: BinanceTrade[];
+        try {
+          page = await call<BinanceTrade[]>(path, { ...extra, symbol, fromId: String(fromId), limit: "1000" });
+        } catch (e) {
+          const code = (e as { code?: number }).code;
+          if (code === -1121 || code === -11001 || code === -3021) break; // 존재하지 않는(마진 미지원) 거래쌍
+          throw e;
+        }
+        for (const trade of page) out.push({ ...pair, trade });
+        if (page.length) lastIds[symbol] = Math.max(...page.map((t) => t.id));
+        if (page.length < 1000) break;
+        fromId = lastIds[symbol] + 1;
       }
-      for (const trade of page) trades.push({ ...pair, trade });
-      if (page.length) lastIds[symbol] = Math.max(...page.map((t) => t.id));
-      if (page.length < 1000) break;
-      fromId = lastIds[symbol] + 1;
     }
+    return out;
+  };
+
+  const lastIds = { ...state.trades };
+  entries.push(...buildBinanceTrades(source.id, await collectTrades("/api/v3/myTrades", {}, lastIds, "체결", pairs)));
+
+  // 14) 교차 마진 체결: 마진을 쓴 흔적(마진 잔고·대출 이자·이전 마진 체결)이 있을 때만 찾아본다
+  const marginIds = { ...(state.marginTrades ?? {}) };
+  const usesMargin = balances.some((b) => b.location.includes("Margin")) || marginInterest.length > 0 || Object.keys(marginIds).length > 0;
+  let marginCount = 0;
+  if (usesMargin) {
+    await section("마진 체결 내역", async () => {
+      const marginPairs = new Map(pairs);
+      for (const symbol of Object.keys(marginIds)) {
+        const quote = QUOTES.find((q) => symbol.endsWith(q) && symbol.length > q.length);
+        if (quote && !marginPairs.has(symbol)) marginPairs.set(symbol, { base: symbol.slice(0, -quote.length), quote });
+      }
+      const marginTrades = await collectTrades("/sapi/v1/margin/myTrades", { isIsolated: "FALSE" }, marginIds, "마진 체결", marginPairs);
+      const built = buildBinanceMargin(source.id, marginTrades, marginInterest);
+      entries.push(...built);
+      marginCount = built.length;
+    });
   }
-  entries.push(...buildBinanceTrades(source.id, trades));
 
   const existing = await db.ledger.bulkGet(entries.map((e) => e.id));
   await db.transaction("rw", db.ledger, db.syncState, async () => {
     await db.ledger.bulkPut(entries);
-    await db.syncState.put({ key: stateKey, cursor: JSON.stringify({ lastTime: now, trades: lastIds } satisfies BinanceState), syncedAt: now });
+    await db.syncState.put({ key: stateKey, cursor: JSON.stringify({ lastTime: now, trades: lastIds, marginTrades: marginIds } satisfies BinanceState), syncedAt: now });
   });
+  if (marginCount > 0) warnings.push(`마진 체결·대출 이자 기록 ${marginCount}건은 과세 방식 검토가 필요해 미분류로 두었습니다 (검토 항목 #13). 격리 마진은 아직 가져오지 않습니다.`);
+  if (dualCount > 0) warnings.push(`듀얼 인베스트먼트 ${dualCount}건을 미분류로 기록했습니다 (검토 항목 #14). 바이낸스가 만기 결과를 주지 않아 만기 시각 시세로 추정했으므로 잔고 대조로 확인하세요.`);
 
   if (derivatives > 0) warnings.push(`선물 손익·펀딩비·수수료 기록 ${derivatives}건은 과세 여부 검토가 필요해 미분류로 두었습니다.`);
   if (state.lastTime && now - state.lastTime > 89 * DAY) warnings.push("마지막 동기화 후 3개월이 지나 그 사이 선물 내역 일부를 API로 받을 수 없습니다. 바이낸스 거래 명세서(CSV)로 보완하세요.");
   warnings.push(
     "바이낸스는 '거래한 거래쌍' 목록을 주지 않아, 보유·입출금 기록에 나온 코인의 USDT·FDUSD·USDC·BTC·ETH·BNB 거래쌍만 찾아봅니다. 사서 모두 판 코인은 빠질 수 있으니 잔고 대조에서 차이가 나면 거래 명세서(CSV)로 보완하세요.",
-    "마진·법정화폐 카드 결제·듀얼 인베스트먼트·자동 투자 기록은 아직 가져오지 않습니다.",
   );
   return { added: existing.filter((x) => !x).length, unknownTypes: [], warnings };
 }

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import Decimal from "@/lib/decimal";
 import {
   binanceTime,
+  buildBinanceAutoInvest,
+  buildBinanceDualInvestment,
+  buildBinanceFiatPayments,
+  buildBinanceMargin,
+  dualPayout,
+  dualPriceCoin,
   buildBinanceConverts,
   buildBinanceDividends,
   buildBinanceDust,
@@ -100,6 +107,61 @@ describe("binance", () => {
       ["income", "0.05", "reward"],
     ]);
     expect(r.derivatives).toBe(3);
+  });
+
+  it("자동 투자: 지불·매수 코인을 교환으로, 수수료는 따로. 실패 건 제외", () => {
+    const r = buildBinanceAutoInvest("s", [
+      { id: 1, transactionDateTime: 1, transactionStatus: "SUCCESS", sourceAsset: "USDT", sourceAssetAmount: "10", targetAsset: "BTC", targetAssetAmount: "0.0005", transactionFee: "0.01", transactionFeeUnit: "USDT" },
+      { id: 2, transactionDateTime: 2, transactionStatus: "FAILED", sourceAsset: "USDT", sourceAssetAmount: "10", targetAsset: "BTC", targetAssetAmount: "0", transactionFee: "0", transactionFeeUnit: "USDT" },
+    ]);
+    expect(brief(r)).toEqual([
+      ["trade", "USDT", "-10", "bn:ai:1"],
+      ["trade", "BTC", "0.0005", "bn:ai:1"],
+      ["fee", "USDT", "-0.01", "bn:ai:1"],
+    ]);
+  });
+
+  it("카드 결제 매수: 코인 + 법정화폐 지급(교환), 카드에서 들어온 법정화폐(이체)", () => {
+    const r = buildBinanceFiatPayments("s", [
+      { orderNo: "o1", sourceAmount: "100", fiatCurrency: "EUR", obtainAmount: "0.002", cryptoCurrency: "BTC", totalFee: "2", status: "Completed", createTime: 1, side: "BUY" },
+      { orderNo: "o2", sourceAmount: "100", fiatCurrency: "EUR", obtainAmount: "0.002", cryptoCurrency: "BTC", status: "Failed", createTime: 1, side: "BUY" },
+    ]);
+    expect(brief(r)).toEqual([
+      ["trade", "BTC", "0.002", "bn:fiat:o1"],
+      ["trade", "fiat:EUR", "-100", "bn:fiat:o1"],
+      ["transfer", "fiat:EUR", "100", "bn:fiat:o1:bank"],
+    ]);
+  });
+
+  it("마진: 체결과 대출 이자를 미분류로 (빌리기·갚기는 순자산에 영향 없어 기록 안 함)", () => {
+    const r = buildBinanceMargin(
+      "s",
+      [{ base: "BTC", quote: "USDT", trade: { symbol: "BTCUSDT", id: 5, orderId: 50, qty: "0.01", quoteQty: "1000", commission: "0", commissionAsset: "BNB", time: 1, isBuyer: false } }],
+      [{ asset: "BTC", interest: "0.000001", interestAccuredTime: 3600000, type: "PERIODIC" }],
+    );
+    expect(r.map((e) => [e.kind, e.asset, e.amount, e.location])).toEqual([
+      ["other", "BTC", "-0.01", "Binance Cross Margin"],
+      ["other", "USDT", "1000", "Binance Cross Margin"],
+      ["other", "BTC", "-0.000001", "Binance Cross Margin"],
+    ]);
+    expect(r[0].id).toBe("s:bn:mt:BTCUSDT:5:base");
+  });
+
+  it("듀얼 인베스트먼트: 만기 시세로 전환 여부를 추정하고 이자를 더한다", () => {
+    const call = { id: "d1", investCoin: "BTC", exercisedCoin: "USDT", subscriptionAmount: "0.1", strikePrice: "100000", duration: 365, settleDate: 1000, purchaseStatus: "SETTLED", apr: "0.1", optionType: "CALL", subscriptionTime: 1 };
+    const put = { ...call, id: "d2", investCoin: "USDT", exercisedCoin: "BTC", subscriptionAmount: "1000", strikePrice: "50000", optionType: "PUT" };
+    expect(dualPayout(call, new Decimal("120000"))).toMatchObject({ coin: "USDT", exercised: true });
+    expect(dualPayout(call, new Decimal("120000")).amount.toString()).toBe("11000"); // 0.1 × 100000 × 1.1
+    expect(dualPayout(call, new Decimal("90000")).amount.toString()).toBe("0.11");
+    expect(dualPayout(put, new Decimal("40000")).amount.toString()).toBe("0.022"); // 1000 / 50000 × 1.1
+    expect(dualPriceCoin(put)).toBe("BTC");
+
+    const r = buildBinanceDualInvestment("s", [call, { ...put, purchaseStatus: "PURCHASE_SUCCESS" }], new Map([["d1", new Decimal("90000")]]), 2000);
+    expect(r.map((e) => [e.kind, e.asset, e.amount, e.groupId])).toEqual([
+      ["other", "BTC", "-0.1", "bn:dci:d1"],
+      ["other", "BTC", "0.11", "bn:dci:d1"],
+      ["other", "USDT", "-1000", "bn:dci:d2"],
+    ]);
   });
 
   it("P2P 원화 매수: 코인 입금 + 원화 지급(교환), 은행에서 들어온 원화(이체)로 원화 합계 0", () => {

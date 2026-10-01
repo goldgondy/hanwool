@@ -27,6 +27,11 @@ const ALLOWED: Record<string, { host: string; method: "GET" | "POST" }> = {
   "/sapi/v1/simple-earn/locked/history/rewardsRecord": { host: SPOT, method: "GET" },
   "/sapi/v1/pay/transactions": { host: SPOT, method: "GET" },
   "/sapi/v1/c2c/orderMatch/listUserOrderHistory": { host: SPOT, method: "GET" },
+  "/sapi/v1/lending/auto-invest/history/list": { host: SPOT, method: "GET" },
+  "/sapi/v1/fiat/payments": { host: SPOT, method: "GET" },
+  "/sapi/v1/margin/myTrades": { host: SPOT, method: "GET" },
+  "/sapi/v1/margin/interestHistory": { host: SPOT, method: "GET" },
+  "/sapi/v1/dci/product/positions": { host: SPOT, method: "GET" },
   "/fapi/v1/income": { host: USDM, method: "GET" },
   "/dapi/v1/income": { host: COINM, method: "GET" },
 };
