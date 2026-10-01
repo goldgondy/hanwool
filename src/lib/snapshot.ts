@@ -1,6 +1,7 @@
 import Decimal from "@/lib/decimal";
 import { db, isExchangeKind, type Holding, type Snapshot } from "@/lib/db";
 import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
+import { csvSourcesShadowedByApi } from "@/lib/ledger/dedup";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
 import { fetchXapiBalances } from "@/lib/sources/exchanges";
@@ -45,9 +46,11 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
 
   const errors: Snapshot["errors"] = [];
   const collected: (RawBalance & { sourceId: string; sourceLabel: string })[] = [];
+  // API 계정과 연결된 CSV 계정은 같은 계정이므로 잔고를 두 번 더하지 않는다 (API 실시간 잔고만 사용)
+  const shadowed = csvSourcesShadowedByApi(sources);
 
   await Promise.all(
-    sources.map(async (s) => {
+    sources.filter((s) => !shadowed.has(s.id)).map(async (s) => {
       try {
         let balances: RawBalance[];
         if (s.kind === "binance") {

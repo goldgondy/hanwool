@@ -57,6 +57,9 @@ export interface CsvSource {
   label: string;
   exchange: string; // 변환기 거래소 ID (lib/importers)
   imports: { at: number; fileName: string; format: string; rows: number; added: number }[];
+  // 같은 거래소 계정의 API 연결. 연결되면 CSV가 덮는 기간은 CSV를, 그 밖은 API 내역을 쓰고 (lib/ledger/dedup.ts),
+  // 잔고는 API 실시간 잔고만 쓴다.
+  linkedSourceId?: string;
   createdAt: number;
 }
 
@@ -75,6 +78,13 @@ export interface XapiSource {
 export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | CsvSource;
 export type ExchangeSource = BinanceSource | OkxSource | XapiSource;
 export const isExchangeKind = (kind: SourceKind) => kind === "binance" || kind === "okx" || kind === "xapi";
+
+// 거래소 ID (CSV 변환기의 exchange와 같은 이름). 거래소 계정이 아니면 null.
+export function exchangeIdOf(s: Source): string | null {
+  if (s.kind === "binance" || s.kind === "okx") return s.kind;
+  if (s.kind === "xapi" || s.kind === "csv") return s.exchange;
+  return null;
+}
 
 export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon";
 

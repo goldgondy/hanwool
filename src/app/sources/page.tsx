@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type CsvSource, type EvmChain } from "@/lib/db";
+import { db, exchangeIdOf, isExchangeKind, type CsvSource, type EvmChain, type Source } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
@@ -204,11 +204,14 @@ interface CsvPreview {
 }
 
 function CsvImportCard() {
-  const csvSources = useLiveQuery(() => db.sources.where("kind").equals("csv").toArray(), []) as CsvSource[] | undefined;
+  const allSources = useLiveQuery(() => db.sources.toArray(), []);
+  const csvSources = allSources?.filter((s): s is CsvSource => s.kind === "csv");
   const [preview, setPreview] = useState<CsvPreview | null>(null);
   const [unknownHeaders, setUnknownHeaders] = useState<string[] | null>(null);
   const [target, setTarget] = useState<string>("new");
   const [label, setLabel] = useState("");
+  const [link, setLink] = useState<string>(""); // 같은 계정의 API 연결 ID ("" = 연결 안 함)
+  const apiSources = (allSources ?? []).filter((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === preview?.adapter.exchange);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -230,6 +233,9 @@ function CsvImportCard() {
     const same = (csvSources ?? []).find((s) => s.exchange === found.adapter.exchange);
     setTarget(same ? same.id : "new");
     setLabel(`${found.adapter.exchangeName} (CSV)`);
+    // 기존 연결을 유지하고, 없으면 같은 거래소의 첫 API 연결을 기본값으로 제안한다
+    const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === found.adapter.exchange);
+    setLink(same?.linkedSourceId ?? api?.id ?? "");
   }
 
   async function onImport() {
@@ -251,6 +257,7 @@ function CsvImportCard() {
         await db.ledger.bulkPut(entries);
         await db.sources.put({
           ...source,
+          linkedSourceId: link || undefined,
           imports: [...source.imports, { at: Date.now(), fileName: preview.fileName, format: adapter.id, rows: preview.result.rowCount, added }],
         });
       });
@@ -304,6 +311,20 @@ function CsvImportCard() {
                 ))}
             </select>
             {target === "new" && <input className={`${input} w-48`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="계정 이름" />}
+            {apiSources.length > 0 && (
+              <label className="flex w-full flex-wrap items-center gap-2 text-xs">
+                같은 계정의 API 연결
+                <select className={`${input} w-auto`} value={link} onChange={(e) => setLink(e.target.value)}>
+                  {apiSources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                  <option value="">없음 (다른 계정)</option>
+                </select>
+                <span className="text-stone-500">같은 계정이면 CSV 기간은 CSV를, 그 밖의 기간은 API 내역을 써서 중복을 막습니다.</span>
+              </label>
+            )}
             <button className={button} onClick={onImport}>
               가져오기
             </button>
@@ -617,6 +638,30 @@ function EvmForm() {
   );
 }
 
+// CSV 계정을 같은 거래소의 API 계정과 연결하거나 해제한다 (중복 제거·잔고 이중 합산 방지).
+function CsvLink({ source, all }: { source: CsvSource; all: Source[] }) {
+  const apis = all.filter((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === source.exchange);
+  if (apis.length === 0) return null;
+  const linked = apis.some((a) => a.id === source.linkedSourceId);
+  return (
+    <label className="flex items-center gap-1 text-xs text-stone-500">
+      같은 계정:
+      <select
+        className="rounded border border-stone-300 bg-transparent px-1 py-0.5 dark:border-stone-700"
+        value={linked ? source.linkedSourceId : ""}
+        onChange={(e) => db.sources.put({ ...source, linkedSourceId: e.target.value || undefined })}
+      >
+        <option value="">연결 안 함</option>
+        {apis.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 // 계정과 함께 그 계정의 원장·동기화 상태도 지운다.
 async function removeSource(id: string) {
   await db.transaction("rw", db.sources, db.ledger, db.syncState, async () => {
@@ -661,6 +706,7 @@ export default function SourcesPage() {
                         ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
                         : mask(s.apiKey)}
               </code>
+              {s.kind === "csv" && <CsvLink source={s} all={sources ?? []} />}
               <button
                 onClick={() => removeSource(s.id)}
                 className="ml-auto text-xs text-red-600 hover:underline"
