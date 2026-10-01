@@ -15,6 +15,8 @@ const SAMPLE = `﻿User_ID,UTC_Time,Account,Operation,Coin,Change,Remark
 12345,2025-03-06 00:00:00,Spot,Brand New Operation,ABC,1,
 12345,2025-03-07 00:00:00,Spot,Withdraw,BTC,-0.005,
 12345,2025-03-08 00:00:00,Spot,Fiat Deposit,KRW,1000000,
+12345,2025-03-09 00:00:00,USDT-Futures,Realized Profit and Loss,USDT,25.5,
+12345,2025-03-09 00:00:00,USDT-Futures,Fee,USDT,-0.8,
 `;
 
 describe("바이낸스 전체 거래 명세서", () => {
@@ -27,9 +29,9 @@ describe("바이낸스 전체 거래 명세서", () => {
   const result = found.adapter!.convert("table" in found ? found.table : { headers: [], rows: [] }, "src1");
 
   it("행마다 원장 항목을 만들고, 모르는 유형을 알려 준다", () => {
-    expect(result.entries).toHaveLength(11);
+    expect(result.entries).toHaveLength(13);
     expect(result.unknownTypes).toEqual(["Brand New Operation"]);
-    expect(result.range).toEqual({ from: Date.parse("2025-03-01T09:00:00Z"), to: Date.parse("2025-03-08T00:00:00Z") });
+    expect(result.range).toEqual({ from: Date.parse("2025-03-01T09:00:00Z"), to: Date.parse("2025-03-09T00:00:00Z") });
     expect(result.entries.every((e) => e.origin === "exchange")).toBe(true);
   });
 
@@ -52,6 +54,18 @@ describe("바이낸스 전체 거래 명세서", () => {
     expect(byType("Withdraw")).toMatchObject({ category: "external_out", status: "needs_review" });
     expect(byType("Fiat Deposit")).toMatchObject({ category: "fiat_transfer", status: "confirmed" });
     expect(byType("Deposit")).toMatchObject({ category: "external_in", status: "needs_review" });
+  });
+
+  it("선물 손익과 선물 수수료는 같은 기준(미분류)으로 두고 세금 계산에 넣지 않는다", () => {
+    const futures = result.entries.filter((e) => e.location.includes("Futures"));
+    expect(futures.map((e) => [e.rawType, e.kind])).toEqual([
+      ["Realized Profit and Loss", "other"],
+      ["Fee", "other"],
+    ]);
+    const groups = classifyAll({ entries: futures, ownAddresses: new Set(), decisions: new Map() });
+    expect(groups.every((g) => g.classification.status === "needs_review")).toBe(true);
+    expect(groups.some((g) => g.classification.category === "fee_only")).toBe(false);
+    expect(result.warnings.join()).toMatch(/선물/);
   });
 });
 

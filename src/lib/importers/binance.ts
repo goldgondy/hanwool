@@ -130,8 +130,11 @@ export const binanceStatement: CsvAdapter = {
       from = Math.min(from, time);
       to = Math.max(to, time);
 
-      const family = OPERATIONS[op.toLowerCase()];
+      let family = OPERATIONS[op.toLowerCase()];
       if (!family) unknown.add(op);
+      // 선물 계정(USDT-Futures, Coin-Futures 등)의 체결·수수료는 파생상품 손익의 일부다.
+      // 손익과 같은 기준으로 다루도록 함께 미분류로 둔다 (손익은 빼고 수수료만 손실로 잡히는 일을 막음).
+      if (/futures/i.test(row["Account"] ?? "") && (family === "trade" || family === "fee")) family = "derivative";
 
       // 체결·수수료·전환은 같은 시각끼리, 내부 이동은 같은 시각끼리 한 거래로 묶는다. 나머지는 행마다 따로.
       const key = rowKey([row["UTC_Time"], row["Account"] ?? "", op, coin, changeRaw, row["Remark"] ?? ""], seen);
@@ -158,8 +161,8 @@ export const binanceStatement: CsvAdapter = {
       });
     });
 
-    if (entries.some((e) => OPERATIONS[e.rawType!.toLowerCase()] === "derivative")) {
-      warnings.push("선물 손익(Realized PnL·Funding Fee)이 있습니다. 파생상품 손익의 과세 여부는 검토가 필요해 미분류로 두었습니다.");
+    if (entries.some((e) => e.kind === "other" && (OPERATIONS[e.rawType!.toLowerCase()] === "derivative" || /futures/i.test(e.location)))) {
+      warnings.push("선물 손익·펀딩비·선물 수수료가 있습니다. 파생상품 손익의 과세 여부는 검토가 필요해 미분류로 두고 세금 계산에서 제외했습니다.");
     }
 
     return {
