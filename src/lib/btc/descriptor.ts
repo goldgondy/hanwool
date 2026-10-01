@@ -16,6 +16,7 @@ export const SCRIPT_LABEL: Record<ScriptType, string> = {
 
 export type ParsedWallet =
   | { kind: "address"; address: string }
+  | { kind: "addresses"; addresses: string[] } // xpub을 지우고 찾아 둔 주소만 남긴 지갑
   | { kind: "hd"; key: HDKey; scriptType: ScriptType; xpub: string };
 
 // SLIP-132 확장 공개키 버전 바이트 (메인넷, 단일 서명)

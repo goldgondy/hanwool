@@ -43,7 +43,10 @@ export interface BtcSource {
   id: string;
   kind: "btc";
   label: string;
-  input: string; // 주소, xpub/ypub/zpub, 또는 디스크립터 (lib/btc/descriptor.ts)
+  input: string; // 주소, xpub/ypub/zpub, 또는 디스크립터 (lib/btc/descriptor.ts). xpub을 지웠으면 ""
+  // xpub을 지우고 남긴 주소 목록. 있으면 이 주소들만 조회한다 (새로 생긴 주소는 찾지 못함)
+  frozenAddresses?: string[];
+  frozenAt?: number; // xpub을 지운 시각. 이후 보낸 거래는 거스름돈 주소를 몰라 외부 송금으로 잘못 잡힐 수 있다
   scriptType?: "p2pkh" | "p2sh-p2wpkh" | "p2wpkh" | "p2tr"; // xpub만 입력한 경우 사용자가 고른 주소 형식
   gapLimit: number;
   esploraUrl: string; // mempool.space 또는 개인 노드

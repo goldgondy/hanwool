@@ -20,6 +20,12 @@ export async function scanWallet(
     const stats = await esplora.addressStats(wallet.address);
     return [{ address: wallet.address, path: "", stats }];
   }
+  if (wallet.kind === "addresses") {
+    // 고정된 주소 목록: 새 주소를 찾지 않고 이 주소들만 조회한다
+    const results = await mapLimit(wallet.addresses, 2, async (address) => ({ address, path: "", stats: await esplora.addressStats(address) }));
+    onProgress(`저장된 주소 ${results.length}개 확인`);
+    return results.filter((r) => r.stats.chain_stats.tx_count + r.stats.mempool_stats.tx_count > 0);
+  }
 
   const used: UsedAddress[] = [];
   for (const chain of [0, 1] as const) {

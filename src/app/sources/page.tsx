@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, exchangeIdOf, isExchangeKind, type CsvSource, type EvmChain, type Source } from "@/lib/db";
+import { db, exchangeIdOf, isExchangeKind, type BtcSource, type CsvSource, type EvmChain, type Source } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
@@ -350,7 +350,7 @@ function preview(input: string, scriptType: ScriptType | "") {
   if (!input.trim()) return null;
   try {
     const w = parseWalletInput(input, scriptType || undefined);
-    if (w.kind === "address") return { ok: true as const, text: "단일 주소", isXpub: false };
+    if (w.kind !== "hd") return { ok: true as const, text: "단일 주소", isXpub: false };
     const isXpub = /^xpub/.test(input.trim());
     return {
       ok: true as const,
@@ -457,11 +457,16 @@ function BtcForm() {
 async function findDuplicateBtc(raw: string, scriptType: ScriptType | ""): Promise<string | null> {
   const fingerprint = (input: string, st?: string) => {
     const w = parseWalletInput(input, (st || undefined) as ScriptType | undefined);
-    return w.kind === "address" ? w.address : deriveAddress(w, 0, 0);
+    return w.kind === "hd" ? deriveAddress(w, 0, 0) : w.kind === "address" ? w.address : w.addresses[0];
   };
   const mine = fingerprint(raw, scriptType);
   const existing = (await db.sources.toArray()).filter((s) => s.kind === "btc");
   for (const s of existing) {
+    if (s.frozenAddresses?.length) {
+      // xpub을 지운 지갑: 남긴 주소로만 비교한다
+      if (s.frozenAddresses.includes(mine)) return `이미 연결된 지갑(${s.label})에 포함된 주소입니다.`;
+      continue;
+    }
     if (fingerprint(s.input, s.scriptType) === mine) return `이미 연결된 지갑입니다 (${s.label}).`;
     // 단일 주소가 이미 연결된 HD 지갑에 속하는지 (동기화한 적이 있는 지갑만 확인 가능)
     const saved = await db.syncState.get(`${s.id}:addresses`);
@@ -662,6 +667,50 @@ function CsvLink({ source, all }: { source: CsvSource; all: Source[] }) {
   );
 }
 
+// xpub 스캔 후 삭제: 동기화로 찾은 주소만 남기고 xpub(과거·미래의 모든 주소를 아는 키)을 지운다.
+function ForgetXpub({ source }: { source: BtcSource }) {
+  const saved = useLiveQuery(() => db.syncState.get(`${source.id}:addresses`), [source.id]);
+  const [confirm, setConfirm] = useState(false);
+  let isHd = false;
+  try {
+    isHd = !source.frozenAddresses?.length && parseWalletInput(source.input, source.scriptType).kind === "hd";
+  } catch {
+    isHd = false;
+  }
+  if (!isHd) return null;
+  const addresses = saved ? (JSON.parse(saved.cursor) as string[]) : [];
+  if (addresses.length === 0) {
+    return <span className="text-xs text-stone-400">동기화 후 xpub을 지울 수 있습니다</span>;
+  }
+  if (!confirm) {
+    return (
+      <button onClick={() => setConfirm(true)} className="text-xs text-stone-500 underline">
+        xpub 지우기
+      </button>
+    );
+  }
+  return (
+    <div className="basis-full space-y-1 rounded-lg bg-amber-50 p-3 text-xs dark:bg-amber-950/40">
+      <p>
+        찾아 둔 주소 {addresses.length}개만 남기고 xpub을 지웁니다. 이후 지갑이 <b>새로 만드는 주소</b>(새 받는 주소·거스름돈)는
+        찾지 못합니다. 특히 이 지갑에서 <b>비트코인을 보내면</b> 거스름돈이 외부 송금으로 잘못 계산될 수 있으니, 그때는 xpub을 다시
+        넣어 갱신하세요 (앱이 경고합니다).
+      </p>
+      <div className="flex gap-3">
+        <button
+          className="font-medium text-red-600 underline"
+          onClick={() => db.sources.put({ ...source, input: "", frozenAddresses: addresses, frozenAt: Date.now() })}
+        >
+          지우기
+        </button>
+        <button className="underline" onClick={() => setConfirm(false)}>
+          취소
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // 계정과 함께 그 계정의 원장·동기화 상태도 지운다.
 async function removeSource(id: string) {
   await db.transaction("rw", db.sources, db.ledger, db.syncState, async () => {
@@ -699,7 +748,7 @@ export default function SourcesPage() {
                       .map((c) => EVM_CHAINS[c].name)
                       .join(", ")}`
                   : s.kind === "btc"
-                    ? `${mask(s.input)} · ${new URL(s.esploraUrl).host}`
+                    ? `${s.frozenAddresses?.length ? `주소 ${s.frozenAddresses.length}개 (xpub 지움)` : mask(s.input)} · ${new URL(s.esploraUrl).host}`
                     : s.kind === "csv"
                       ? `파일 ${s.imports.length}개 가져옴`
                       : s.kind === "xapi"
@@ -707,6 +756,7 @@ export default function SourcesPage() {
                         : mask(s.apiKey)}
               </code>
               {s.kind === "csv" && <CsvLink source={s} all={sources ?? []} />}
+              {s.kind === "btc" && <ForgetXpub source={s} />}
               <button
                 onClick={() => removeSource(s.id)}
                 className="ml-auto text-xs text-red-600 hover:underline"
