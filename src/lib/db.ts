@@ -131,7 +131,7 @@ export interface LedgerEntry {
   txHash?: string;
   counterparty?: string; // 상대 주소
   // 기록 출처. 거래소 체결·보상 기록은 추정이 아니므로 분류를 확정한다 (분류 규칙 R1–R3). 없으면 블록체인.
-  origin?: "chain" | "exchange";
+  origin?: "chain" | "exchange" | "manual"; // manual: 잔고 대사 조정 등 사용자가 추가한 항목
   // 거래소가 명시한 성격 (예: reward, airdrop). 분류 규칙에서 쓴다.
   tag?: "reward" | "airdrop";
   // 원본 기록의 유형 이름 (예: 바이낸스 "Transaction Buy"). 검토 화면 표시용.
@@ -142,6 +142,17 @@ export interface SyncState {
   key: string; // `${sourceId}:${scope}`
   cursor: string; // 예: 마지막으로 가져온 블록 번호
   syncedAt: number;
+}
+
+// 계정별 최근 잔고 대사 결과 (lib/reconcile)
+export interface ReconciliationRecord {
+  key: string; // 계정 키 (대표 계정 ID)
+  label: string;
+  memberIds: string[]; // 대사에 포함한 계정 (대표 + 연결된 CSV)
+  at: number;
+  status: "ok" | "no_history" | "error";
+  error?: string;
+  rows: { assetKey: string; asset: string; location: string; ledger: string; actual: string; diff: string }[];
 }
 
 export interface Setting {
@@ -157,6 +168,7 @@ export const db = new Dexie("crypto-tax-engine") as Dexie & {
   ledger: EntityTable<LedgerEntry, "id">;
   syncState: EntityTable<SyncState, "key">;
   decisions: EntityTable<Decision, "key">;
+  reconciliations: EntityTable<ReconciliationRecord, "key">;
 };
 
 db.version(1).stores({
@@ -211,6 +223,17 @@ db.version(5).stores({
   ledger: "id, sourceId, time, groupId, [sourceId+assetKey]",
   syncState: "key",
   decisions: "key",
+});
+
+// v6: 잔고 대사 결과
+db.version(6).stores({
+  sources: "id, kind, createdAt",
+  snapshots: "id, takenAt",
+  settings: "key",
+  ledger: "id, sourceId, time, groupId, [sourceId+assetKey]",
+  syncState: "key",
+  decisions: "key",
+  reconciliations: "key",
 });
 
 export async function getSetting(key: string): Promise<string | undefined> {

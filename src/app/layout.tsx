@@ -36,6 +36,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/ledger" className="text-stone-500 hover:text-foreground">
               원장
             </Link>
+            <Link href="/reconcile" className="text-stone-500 hover:text-foreground">
+              잔고 대사
+            </Link>
             <Link href="/review" className="text-stone-500 hover:text-foreground">
               분류 검토
             </Link>

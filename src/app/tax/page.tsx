@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import Decimal from "@/lib/decimal";
+import { db } from "@/lib/db";
 import { loadClassifiedGroups } from "@/lib/classify/load";
+import { ignoredDiffs } from "@/lib/reconcile/run";
 import { CATEGORY_LABEL } from "@/lib/classify/types";
 import { formatAmount, formatDateTime, formatKrw } from "@/lib/format";
 import { buildTaxEvents, DEEMED_PRICE_TIME, poolOf, priceKey, priceQueries, type BuildEventsResult } from "@/lib/tax/build-events";
@@ -78,6 +81,15 @@ export default function TaxPage() {
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<Report | null>(null);
+  // 최근 잔고 대사 결과: 설명되지 않은 차이가 있으면 세액이 틀릴 수 있다 (무시한 차이는 제외)
+  const reconcile = useLiveQuery(async () => {
+    const records = await db.reconciliations.toArray();
+    const ignored = await ignoredDiffs(records);
+    const open = records.flatMap((r) =>
+      r.status === "ok" ? r.rows.filter((row) => !new Decimal(row.diff).isZero() && !ignored.has(`${r.key}:${row.assetKey}`)) : [],
+    );
+    return { ran: records.length > 0, open: open.length, lastAt: records.length ? Math.max(...records.map((r) => r.at)) : null };
+  }, []);
 
   async function run() {
     setBusy(true);
@@ -129,6 +141,29 @@ export default function TaxPage() {
         <span className="text-sm text-stone-500">{progress}</span>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      {reconcile && (!reconcile.ran || reconcile.open > 0) && (
+        <section className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm dark:border-red-800 dark:bg-red-950/40">
+          {reconcile.ran ? (
+            <p>
+              <b>잔고 대사에서 설명되지 않은 차이 {reconcile.open}건</b>이 있습니다 (마지막 대사 {formatDateTime(reconcile.lastAt!)}).
+              빠진 거래가 있으면 세액이 틀릴 수 있으니{" "}
+              <Link href="/reconcile" className="underline">
+                잔고 대사
+              </Link>
+              에서 먼저 확인하세요.
+            </p>
+          ) : (
+            <p>
+              아직 잔고 대사를 하지 않았습니다. 빠진 거래가 없는지{" "}
+              <Link href="/reconcile" className="underline">
+                잔고 대사
+              </Link>
+              로 먼저 확인하는 것을 권합니다.
+            </p>
+          )}
+        </section>
+      )}
 
       {report && (
         <>
