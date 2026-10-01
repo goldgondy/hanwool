@@ -70,7 +70,7 @@ export async function koreaGet<T>(exchange: "upbit" | "bithumb", c: KoreaCreds, 
     const err = (data as { error?: { name?: string; message?: string } }).error;
     // 업비트 no_authorization_i_p, 빗썸 out_of_scope = 허용되지 않은 IP
     if (/authorization_i_?p|out_of_scope/i.test(err?.name ?? "")) {
-      throw new Error(`${NAMES[exchange]}: 이 IP가 API 키의 허용 IP로 등록되어 있지 않습니다. 키 설정에서 IP를 등록하세요 (${err.message ?? ""})`);
+      throw new Error(`${NAMES[exchange]}: 이 IP가 API 키의 허용 IP로 등록되어 있지 않습니다. 키 설정에서 IP를 등록하세요 (${err?.message ?? ""})`);
     }
     throw new Error(`${NAMES[exchange]}: ${err?.message ?? `HTTP ${res.status}`}`);
   }
