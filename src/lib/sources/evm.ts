@@ -1,6 +1,7 @@
 import Decimal from "@/lib/decimal";
 import type { EvmChain, EvmSource } from "@/lib/db";
 import type { RawBalance } from "@/lib/sources/types";
+import { OFFICIAL_STABLES } from "@/lib/classify/classifier";
 
 // EVM 데이터는 Blockscout 공개 API로 조회한다.
 // - API 키·가입이 필요 없고 CORS를 허용하므로 브라우저에서 직접 호출한다 (서버를 거치지 않음).
@@ -20,6 +21,12 @@ export const EVM_CHAINS: Record<
 
 export function evmAssetKey(chain: EvmChain, contract: string | null) {
   return `${chain}:${contract ? contract.toLowerCase() : "native"}`;
+}
+
+// 체인별 공식 USDT·USDC가 아닌데 이름이 USDT·USDC인 토큰 (주소 오염·사칭 스팸)
+export function isFakeStable(chain: EvmChain, contract: string, symbol: string | null) {
+  const official = OFFICIAL_STABLES[(symbol ?? "").trim().toUpperCase()];
+  return !!official && !official.has(evmAssetKey(chain, contract));
 }
 
 // 최소 단위 정수 문자열(10진수 또는 0x 16진수)을 소수로 변환한다.
@@ -125,6 +132,10 @@ async function fetchChain(address: string, chain: EvmChain): Promise<RawBalance[
   for (const t of tokens ?? []) {
     const contract = t.token.address ?? t.token.address_hash;
     if (t.token.type !== "ERC-20" || !contract || t.token.decimals == null) continue;
+    // 영문·숫자가 아닌 글자로 진짜 토큰 이름을 흉내 낸 사칭 토큰(예: 키릴 문자 ՍSDС)은 잔고 값도 엉터리라 뺀다
+    if (t.token.symbol && !/^[\x20-\x7E]+$/.test(t.token.symbol)) continue;
+    // 이름만 USDT·USDC인 가짜 토큰도 뺀다 (원장에서도 같은 기준으로 뺀다)
+    if (isFakeStable(chain, contract, t.token.symbol)) continue;
     const live = await evmRpc<string>(chain, "eth_call", [{ to: contract, data: balanceOf }, "latest"]);
     const raw = live && live !== "0x" ? live : t.value;
     const amount = fromBaseUnits(raw, Number(t.token.decimals));

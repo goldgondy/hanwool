@@ -134,9 +134,16 @@ async function syncChain(
   const fromBlock = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
 
   const { txs, internal, tokens, maxBlock } = await fetchChainHistory(address, chain, fromBlock, onProgress);
-  const { entries, skipped } = buildEvmEntries({ sourceId: source.id, chain, address, txs, internal, tokens });
-  if (skipped.length > 0) {
-    warnings.push(`${name}: ${skipped.length}건은 수량을 해석하지 못해 제외했습니다`);
+  // 이미 받은 적 있는 토큰 (가짜 전송 판별용)
+  const knownTokens = new Set<string>();
+  for (const e of await db.ledger.where("sourceId").equals(source.id).toArray()) {
+    if (e.assetKey.startsWith(`${chain}:`) && !e.amount.startsWith("-")) knownTokens.add(e.assetKey);
+  }
+  const { entries, skipped } = buildEvmEntries({ sourceId: source.id, chain, address, txs, internal, tokens, knownTokens });
+  const spoofed = skipped.filter((s) => s.spoof).length;
+  if (spoofed > 0) warnings.push(`${name}: 받은 적 없는 토큰을 보냈다는 가짜 기록 ${spoofed}건을 제외했습니다 (주소 오염 사기). 비슷한 주소로 송금하지 않도록 주의하세요.`);
+  if (skipped.length > spoofed) {
+    warnings.push(`${name}: ${skipped.length - spoofed}건은 수량을 해석하지 못해 제외했습니다`);
   }
 
   await db.transaction("rw", db.ledger, db.syncState, async () => {

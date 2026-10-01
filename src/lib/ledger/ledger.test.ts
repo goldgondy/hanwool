@@ -115,6 +115,33 @@ describe("buildEvmEntries", () => {
     expect(skipped).toHaveLength(1);
   });
 
+  it("주소 오염: 받은 적 없는 토큰을 내가 서명하지 않은 거래에서 보냈다는 기록은 뺀다", () => {
+    const FAKE = "0x9999999999999999999999999999999999999999";
+    const { entries, skipped } = build({
+      tokens: [token({ hash: "0x20", from: ME, to: FRIEND, value: "2500000000", token: FAKE, symbol: "USDC" })],
+    });
+    expect(entries).toHaveLength(0);
+    expect(skipped[0].spoof).toBe(true);
+  });
+
+  it("받은 적 있는 토큰이거나 내가 보낸 거래면 정상 출금으로 기록한다", () => {
+    const received = build({
+      tokens: [
+        token({ hash: "0x21", from: FRIEND, to: ME, value: "100000000", time: TIME }),
+        token({ hash: "0x22", from: ME, to: DEX, value: "50000000", time: TIME + 1 }), // 남(릴레이어)이 실행한 전송이라도 받은 적 있으면 정상
+      ],
+    });
+    expect(received.entries.map((e) => e.amount)).toEqual(["100", "-50"]);
+    const earlier = build({ tokens: [token({ hash: "0x23", from: ME, to: DEX, value: "50000000" })], knownTokens: [`eth:${USDC.toLowerCase()}`] });
+    expect(earlier.entries).toHaveLength(1);
+  });
+
+  it("영문이 아닌 글자로 이름을 흉내 낸 사칭 토큰(ՍSDС)은 원장에서 뺀다", () => {
+    const { entries, skipped } = build({ tokens: [token({ hash: "0x24", from: FRIEND, to: ME, value: "100", symbol: "ՍSDС" })] });
+    expect(entries).toHaveLength(0);
+    expect(skipped[0].spoof).toBe(true);
+  });
+
   it("아주 작은 수량을 지수 표기 없이 저장한다", () => {
     const { entries } = build({ txs: [tx({ hash: "0x12", from: FRIEND, to: ME, value: "1" })] });
     expect(entries[0].amount).toBe("0.000000000000000001");
