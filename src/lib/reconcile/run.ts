@@ -1,8 +1,10 @@
 import Decimal from "@/lib/decimal";
 import type { Category } from "@/lib/classify/types";
 import { db, getSetting, isExchangeKind, setSetting, type LedgerEntry, type ReconciliationRecord } from "@/lib/db";
-import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
+import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
 import { applyCsvCoverage } from "@/lib/ledger/dedup";
+import { syncEvmHistory } from "@/lib/ledger/evm-sync";
+import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
 import { reconcile } from "@/lib/ledger/reconcile";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
@@ -29,11 +31,28 @@ async function liveBalances(s: LiveSource): Promise<RawBalance[]> {
   }
 }
 
+// 내역을 가져올 수 있는 계정을 먼저 동기화한다. 오래된 원장을 지금 잔고와 비교하면
+// 그 사이의 거래(가스비 등)만큼 가짜 차이가 생긴다. 증분 동기화라 보통 빠르다.
+async function syncBeforeReconcile(sources: LiveSource[], onProgress: (msg: string) => void, errors: Map<string, string>) {
+  for (const s of sources) {
+    try {
+      if (s.kind === "evm") await syncEvmHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+      else if (s.kind === "btc") await syncBtcHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+      else if (s.kind === "xapi" && HISTORY_SUPPORTED.has(s.exchange) && isUnlocked()) await syncXapiHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+    } catch (e) {
+      errors.set(s.id, `내역 동기화 실패 (오래된 원장으로 대사함): ${e instanceof Error ? e.message : e}`);
+    }
+  }
+}
+
 // 모든 계정을 대사해 결과를 저장한다. 거래 내역이 없는 계정은 대사하지 않는다 (잔고 전체가 차이로 나와 의미가 없다).
-export async function runReconciliation(onProgress: (msg: string) => void = () => {}): Promise<ReconciliationRecord[]> {
-  const [sources, all] = await Promise.all([db.sources.toArray(), db.ledger.toArray()]);
-  const { entries } = applyCsvCoverage(all, sources);
+export async function runReconciliation(onProgress: (msg: string) => void = () => {}, { syncFirst = true } = {}): Promise<ReconciliationRecord[]> {
+  const sources = await db.sources.toArray();
   const { accounts } = buildAccounts(sources);
+  const syncErrors = new Map<string, string>();
+  if (syncFirst) await syncBeforeReconcile(accounts.map((a) => a.primary), onProgress, syncErrors);
+
+  const { entries } = applyCsvCoverage(await db.ledger.toArray(), sources);
 
   const records: ReconciliationRecord[] = [];
   for (const [i, acc] of accounts.entries()) {
@@ -54,6 +73,7 @@ export async function runReconciliation(onProgress: (msg: string) => void = () =
       records.push({
         ...base,
         status: "ok",
+        error: syncErrors.get(acc.primary.id),
         rows: rows.map((r) => ({
           assetKey: r.assetKey,
           asset: r.asset,

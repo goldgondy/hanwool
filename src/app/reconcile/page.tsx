@@ -149,7 +149,8 @@ export default function ReconcilePage() {
         <h2 className="text-lg font-semibold">잔고 대사</h2>
         <p className="text-sm text-stone-500">
           거래 내역으로 계산한 잔고와 실제 잔고를 계정·자산별로 비교합니다. 모두 일치하면 빠진 거래가 없다는 가장 강력한
-          근거가 되고, 차이가 있으면 놓친 보상·입출금·손실이 있다는 신호입니다.
+          근거가 되고, 차이가 있으면 놓친 보상·입출금·손실이 있다는 신호입니다. 대사 전에 지갑과 지원하는 거래소의 최신
+          내역을 먼저 가져옵니다.
         </p>
       </div>
 
@@ -208,6 +209,7 @@ export default function ReconcilePage() {
                 </p>
               )}
               {r.status === "error" && <p className="mt-1 text-sm text-red-600">{r.error}</p>}
+              {r.status === "ok" && r.error && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{r.error}</p>}
               {diffs.length > 0 && (
                 <ul className="mt-2">
                   {diffs.map((row) => (

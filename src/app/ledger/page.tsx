@@ -79,14 +79,22 @@ function ReconcileTable({
   rows,
   selected,
   onSelect,
+  synced,
 }: {
   rows: ReconcileRow[];
   selected: string | null;
   onSelect: (key: string | null) => void;
+  synced: boolean; // 대조 직전에 내역을 동기화했는지
 }) {
   const mismatches = rows.filter((r) => !r.diff.isZero()).length;
   return (
     <section className="space-y-2">
+      {mismatches > 0 && !synced && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          마지막 동기화 이후에 새 거래가 생겼다면 그만큼 차이가 납니다. 먼저 <b>내역 동기화</b>로 최신 거래를 가져온 뒤 다시
+          확인하세요.
+        </p>
+      )}
       <h3 className="font-semibold">
         수량 대사{" "}
         <span className={mismatches ? "text-red-600" : "text-emerald-600"}>
@@ -145,11 +153,17 @@ function SourceLedger({ source }: { source: LedgerSource }) {
   const [results, setResults] = useState<SyncLine[] | null>(null);
   const [rows, setRows] = useState<ReconcileRow[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [synced, setSynced] = useState(false);
 
   const entries = useLiveQuery(
     () => db.ledger.where("sourceId").equals(source.id).reverse().sortBy("time"),
     [source.id],
   );
+  // 이 계정의 마지막 내역 동기화 시각 (체인별·종류별 동기화 상태 중 가장 최근)
+  const lastSync = useLiveQuery(async () => {
+    const states = await db.syncState.where("key").startsWith(`${source.id}:`).toArray();
+    return states.length ? Math.max(...states.map((s) => s.syncedAt)) : null;
+  }, [source.id]);
   const shown = (entries ?? []).filter((e) => !selected || e.assetKey === selected).slice(0, 300);
 
   async function run(withSync: boolean) {
@@ -162,6 +176,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
       const balances = await fetchBalances(source, setProgress);
       const all = await db.ledger.where("sourceId").equals(source.id).toArray();
       setRows(reconcile(all, balances));
+      setSynced(withSync);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -210,7 +225,9 @@ function SourceLedger({ source }: { source: LedgerSource }) {
           >
             잔고 대조만
           </button>
-          <span className="text-sm text-stone-500">{progress}</span>
+          <span className="text-sm text-stone-500">
+            {progress || (lastSync ? `마지막 동기화 ${formatDateTime(lastSync)}` : lastSync === null ? "아직 동기화하지 않았습니다" : "")}
+          </span>
         </div>
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -231,7 +248,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
         </ul>
       )}
 
-      {rows && <ReconcileTable rows={rows} selected={selected} onSelect={setSelected} />}
+      {rows && <ReconcileTable rows={rows} selected={selected} onSelect={setSelected} synced={synced} />}
 
       <section className="space-y-2">
         <h3 className="font-semibold">
