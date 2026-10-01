@@ -65,6 +65,15 @@ describe("classifyGroup", () => {
     expect([c.category, c.status, c.rule]).toEqual(["spam", "suggested", "R10"]);
   });
 
+  it("R10: 이름만 USDT인 사칭 토큰은 스팸 의심, 공식 USDT는 정상 입금", () => {
+    const fake = cls([e({ amount: "1000", asset: "USDT", assetKey: "tron:TFakeUsdtContractAddressXXXXXXXXX", counterparty: "TSomeone" })]);
+    expect([fake.category, fake.rule]).toEqual(["spam", "R10"]);
+    const fakeEvm = cls([e({ amount: "1000", asset: "USDT", assetKey: "eth:0x1111111111111111111111111111111111111111", counterparty: STRANGER })]);
+    expect(fakeEvm.category).toBe("spam");
+    const real = cls([e({ amount: "1000", asset: "USDT", assetKey: "tron:TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", counterparty: "TSomeone" })]);
+    expect(real.category).toBe("external_in");
+  });
+
   it("R12: 모르는 곳에서 받은 ETH는 검토 필요", () => {
     const c = cls([e({ amount: "1", counterparty: STRANGER })]);
     expect([c.category, c.status, c.rule]).toEqual(["external_in", "needs_review", "R12"]);

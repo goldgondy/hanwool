@@ -2,12 +2,13 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, exchangeIdOf, isExchangeKind, type BtcSource, type CsvSource, type EvmChain, type Source } from "@/lib/db";
+import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type Source } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
 import { discoverWallets, requestAddresses, type WalletDetail } from "@/lib/wallet/eip6963";
+import { isTronAddress } from "@/lib/tron/address";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
 import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
@@ -121,7 +122,66 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", csv: "CSV" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", csv: "CSV" } as const;
+
+function TronForm() {
+  const [label, setLabel] = useState("트론 지갑");
+  const [address, setAddress] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const [key, setKey] = useState("");
+  const savedKey = useLiveQuery(() => getSetting("trongridKey"), []);
+  const valid = isTronAddress(address);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!valid) return;
+    const addr = address.trim();
+    const existing = (await db.sources.toArray()).find((s) => s.kind === "tron" && s.address === addr);
+    if (existing) {
+      setNotice(`이미 연결된 주소입니다 (${existing.label}).`);
+      return;
+    }
+    await db.sources.add({ id: crypto.randomUUID(), kind: "tron", label: label.trim() || "트론 지갑", address: addr, createdAt: Date.now() });
+    setNotice(`${label} (${addr.slice(0, 6)}…${addr.slice(-4)})를 연결했습니다.`);
+    setAddress("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">트론 지갑 (TRC-20 USDT 등)</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        업비트·빗썸에서 해외 거래소로 USDT를 보낼 때 많이 쓰는 네트워크입니다. T로 시작하는 주소를 입력하세요. 공개 블록체인
+        데이터(TronGrid)를 이 브라우저에서 직접 조회합니다. <b>복구 문구나 개인키는 절대 입력하지 마세요.</b>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
+      <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="T…" required />
+      {address && !valid && <p className="text-xs text-red-600">트론 주소 형식이 아닙니다 (T로 시작하는 34자, 체크섬 확인).</p>}
+      {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
+      <button className={button} disabled={!valid}>
+        추가
+      </button>
+      <button type="button" className="block text-xs text-stone-500 underline" onClick={() => setShowKey(!showKey)}>
+        TronGrid API 키 (선택{savedKey ? ", 저장됨" : ""})
+      </button>
+      {showKey && (
+        <div className="flex gap-2">
+          <input className={input} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="키 없이도 동작합니다. 거래가 많아 느리면 trongrid.io에서 무료 키를 받아 넣으세요" />
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-stone-300 px-3 text-xs dark:border-stone-700"
+            onClick={async () => {
+              await setSetting("trongridKey", key.trim());
+              setKey("");
+            }}
+          >
+            저장
+          </button>
+        </div>
+      )}
+    </form>
+  );
+}
 
 function XapiForm() {
   const unlocked = useVaultUnlocked();
@@ -753,7 +813,9 @@ export default function SourcesPage() {
                       ? `파일 ${s.imports.length}개 가져옴`
                       : s.kind === "xapi"
                         ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
-                        : mask(s.apiKey)}
+                        : s.kind === "tron"
+                          ? `${s.address.slice(0, 6)}…${s.address.slice(-4)}`
+                          : mask(s.apiKey)}
               </code>
               {s.kind === "csv" && <CsvLink source={s} all={sources ?? []} />}
               {s.kind === "btc" && <ForgetXpub source={s} />}
@@ -771,6 +833,7 @@ export default function SourcesPage() {
       <div className="grid gap-6 md:grid-cols-2">
         <BtcForm />
         <EvmForm />
+        <TronForm />
         <CsvImportCard />
         <BinanceForm />
         <OkxForm />

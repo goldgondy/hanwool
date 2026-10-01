@@ -33,6 +33,7 @@ function txUrl(groupKey: string) {
   const [chain, hash] = groupKey.split(":");
   if (!hash) return undefined;
   if (chain === "btc") return `https://mempool.space/tx/${hash}`;
+  if (chain === "tron") return `https://tronscan.org/#/transaction/${hash}`;
   const evm = EVM_CHAINS[chain as EvmChain];
   return evm ? `${evm.explorer}/tx/${hash}` : undefined;
 }

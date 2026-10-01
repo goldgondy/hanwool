@@ -7,6 +7,35 @@ import type { Classification, Decision } from "./types";
 
 const isFiatKey = (assetKey: string) => assetKey.startsWith("fiat:");
 
+// 체인별 공식 USDT·USDC 컨트랙트 (assetKey 형식). EVM은 소문자, 트론은 Base58 그대로.
+export const OFFICIAL_STABLES: Record<string, Set<string>> = {
+  USDT: new Set([
+    "eth:0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "arb:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+    "opt:0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",
+    "polygon:0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+    "base:0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
+    "tron:TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+  ]),
+  USDC: new Set([
+    "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "arb:0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+    "opt:0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+    "polygon:0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+    "base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "tron:TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
+  ]),
+};
+
+// 블록체인 기록(체인:컨트랙트)에서 이름은 USDT·USDC인데 공식 컨트랙트가 아닌 경우
+function isImpersonatingStable(e: LedgerEntry) {
+  const official = OFFICIAL_STABLES[e.asset.toUpperCase()];
+  if (!official || e.origin === "exchange") return false;
+  const [chain, contract] = e.assetKey.split(":");
+  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, tron: 1 })) return false;
+  return !official.has(e.assetKey);
+}
+
 // 네이티브 코인 래핑 컨트랙트 (소문자). assetKey 형식: `${chain}:${contract}`
 export const WRAPPED_NATIVE = new Set([
   "eth:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // WETH
@@ -124,6 +153,10 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
       });
     if (selfSent) {
       return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "토큰 컨트랙트가 직접 보낸 토큰 (스팸 의심)" };
+    }
+    // R10b: 주요 스테이블코인 이름인데 그 체인의 공식 컨트랙트가 아닌 토큰 → 사칭 토큰 의심 (주소 오염 사기에 흔함)
+    if (outs.length === 0 && ins.every(isImpersonatingStable)) {
+      return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "공식 컨트랙트가 아닌 USDT·USDC (사칭 토큰 의심)" };
     }
     // R12: 출처 불명 입금
     return { ...base, category: "external_in", status: "needs_review", rule: "R12", reason: "연결하지 않은 곳에서 들어옴. 취득 경위를 확인하세요" };
