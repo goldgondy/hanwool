@@ -3,7 +3,8 @@ import { buildBybitEntries, type BybitDeposit, type BybitLog, type BybitWithdraw
 import { buildCoinbaseEntries, type CoinbaseTx } from "@/lib/ledger/coinbase-build";
 import { coinbaseGet, importCoinbaseKey, listCoinbaseAccounts } from "@/lib/sources/coinbase";
 import { buildBitgetEntries, type BitgetBill, type BitgetTransfer } from "@/lib/ledger/bitget-build";
-import { relay, signBitget, signBybit, xapiCreds, type Creds } from "@/lib/sources/exchanges";
+import { buildGateEntries, type GateBook, type GateTransfer } from "@/lib/ledger/gate-build";
+import { relay, signBitget, signBybit, signGate, xapiCreds, type Creds } from "@/lib/sources/exchanges";
 
 // 거래소 API 거래 내역 동기화 (OKX는 lib/ledger/okx-sync.ts).
 
@@ -13,7 +14,7 @@ export interface XapiSyncResult {
   warnings: string[];
 }
 
-export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget"]);
+export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget", "gate"]);
 
 const DAY = 86_400_000;
 const HISTORY_DAYS = 730; // 바이비트 거래 로그 보관 기간 (2년)
@@ -175,9 +176,63 @@ async function syncBitget(source: XapiSource, onProgress: (msg: string) => void)
   return { added: existing.filter((x) => !x).length, unknownTypes: built.unknownTypes, warnings };
 }
 
+// 게이트: 기간을 30일 단위로 잘라(초 단위 시각) 페이지를 끝까지 읽는다
+async function gateCollect<T>(c: Creds, path: string, from: number, to: number, paging: "page" | "offset", limit: number, onWindow: () => void): Promise<T[]> {
+  const out: T[] = [];
+  for (let start = from; start < to; start += 30 * DAY) {
+    const end = Math.min(start + 30 * DAY, to);
+    for (let page = 1; ; page++) {
+      const q: Record<string, string> = {
+        from: String(Math.floor(start / 1000)),
+        to: String(Math.floor(end / 1000)),
+        limit: String(limit),
+        ...(paging === "page" ? { page: String(page) } : { offset: String((page - 1) * limit) }),
+      };
+      const rows = (await relay("gate", await signGate(c, path, q, Date.now()))) as T[];
+      out.push(...rows);
+      if (rows.length < limit) break;
+    }
+    onWindow();
+  }
+  return out;
+}
+
+async function syncGate(source: XapiSource, onProgress: (msg: string) => void): Promise<XapiSyncResult> {
+  const c = await xapiCreds(source);
+  const stateKey = `${source.id}:history`;
+  const now = Date.now();
+  const last = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
+  const from = last ? last - DAY : now - 365 * DAY;
+  const windows = Math.ceil((now - from) / (30 * DAY));
+  let done = 0;
+  const tick = () => onProgress(`게이트 내역 조회 중 (${++done}/${windows * 3})`);
+
+  const book = await gateCollect<GateBook>(c, "/api/v4/spot/account_book", from, now, "page", 1000, tick);
+  const warnings: string[] = [];
+  let deposits: GateTransfer[] = [];
+  let withdrawals: GateTransfer[] = [];
+  try {
+    deposits = await gateCollect<GateTransfer>(c, "/api/v4/wallet/deposits", from, now, "offset", 500, tick);
+    withdrawals = await gateCollect<GateTransfer>(c, "/api/v4/wallet/withdrawals", from, now, "offset", 500, tick);
+  } catch (e) {
+    warnings.push(`입출금 기록 조회 실패 (블록체인 거래 해시 없이 기록): ${e instanceof Error ? e.message : e}`);
+  }
+
+  const built = buildGateEntries({ sourceId: source.id, book, deposits, withdrawals });
+  const existing = await db.ledger.bulkGet(built.entries.map((e) => e.id));
+  await db.transaction("rw", db.ledger, db.syncState, async () => {
+    await db.ledger.bulkPut(built.entries);
+    await db.syncState.put({ key: stateKey, cursor: String(now), syncedAt: now });
+  });
+  warnings.push("현물 계정 장부만 가져옵니다. 선물·마진·Earn 계정으로 옮긴 금액은 '기타'로 기록됩니다.");
+  if (!last) warnings.push("첫 동기화는 최근 1년 내역을 가져옵니다. 그 이전 거래는 게이트 거래 명세서(CSV)로 보완하세요.");
+  return { added: existing.filter((x) => !x).length, unknownTypes: built.unknownTypes, warnings };
+}
+
 export async function syncXapiHistory(source: XapiSource, onProgress: (msg: string) => void = () => {}): Promise<XapiSyncResult> {
   if (source.exchange === "bybit") return syncBybit(source, onProgress);
   if (source.exchange === "coinbase") return syncCoinbase(source, onProgress);
   if (source.exchange === "bitget") return syncBitget(source, onProgress);
+  if (source.exchange === "gate") return syncGate(source, onProgress);
   throw new Error("이 거래소의 거래 내역 API는 아직 지원하지 않습니다");
 }

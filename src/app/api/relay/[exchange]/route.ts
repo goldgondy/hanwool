@@ -35,7 +35,7 @@ const RELAYS: Record<string, RelayConfig> = {
   },
   gate: {
     host: "https://api.gateio.ws",
-    paths: ["/api/v4/spot/accounts"],
+    paths: ["/api/v4/spot/accounts", "/api/v4/spot/account_book", "/api/v4/wallet/deposits", "/api/v4/wallet/withdrawals"],
     headers: ["KEY", "Timestamp", "SIGN"],
   },
   // JWT에 요청 경로가 서명되어 있어, 다른 경로로 바꿔 쓸 수 없다.
