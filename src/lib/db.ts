@@ -70,7 +70,7 @@ export interface CsvSource {
 export interface XapiSource {
   id: string;
   kind: "xapi";
-  exchange: "bybit" | "bitget" | "mexc" | "gate" | "coinbase";
+  exchange: "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb";
   label: string;
   apiKey: string;
   encSecret: EncryptedBlob;

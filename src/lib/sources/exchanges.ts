@@ -3,17 +3,33 @@ import type { XapiSource } from "@/lib/db";
 import type { RawBalance, Warn } from "@/lib/sources/types";
 import { decrypt } from "@/lib/vault";
 import { fetchCoinbaseBalances } from "./coinbase";
+import { fetchKoreaBalances } from "./korea";
 import { hmacSha256Base64, hmacSha256Hex, hmacSha512Hex, sha512Hex } from "./sign";
 
 // 거래소 API 잔고 조회 (바이비트, 비트겟, MEXC, 게이트). 서명은 브라우저에서 하고 /api/relay/[거래소]로 중계한다.
 // 서명 방식은 각 거래소 공식 문서·SDK 기준 (2026-09-30 확인). ⚠ 실제 키로 검증 전.
 
-export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate" | "coinbase";
+export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb";
 
 export const API_EXCHANGES: Record<
   ApiExchange,
   { name: string; needsPassphrase: boolean; keyHelp: string; keyLabel?: string; secretLabel?: string; multilineSecret?: boolean }
 > = {
+  upbit: {
+    name: "업비트",
+    needsPassphrase: false,
+    keyHelp:
+      "업비트 → 마이페이지 → Open API 관리 → 권한은 '자산조회·주문조회·입출금조회'만 체크. 허용 IP에 이 서비스 중계 서버의 IP를 등록해야 합니다 (개발 중에는 이 컴퓨터의 공인 IP)",
+    keyLabel: "Access Key",
+    secretLabel: "Secret Key",
+  },
+  bithumb: {
+    name: "빗썸",
+    needsPassphrase: false,
+    keyHelp: "빗썸 → 마이페이지 → API 관리 → 권한은 '자산 조회·주문 조회·입출금 조회'만. 이 브라우저에서 직접 조회하므로 IP를 제한했다면 지금 쓰는 인터넷의 공인 IP를 등록하세요",
+    keyLabel: "Connect Key (API Key)",
+    secretLabel: "Secret Key",
+  },
   coinbase: {
     name: "코인베이스",
     needsPassphrase: false,
@@ -255,5 +271,8 @@ export async function fetchXapiBalances(source: XapiSource, warn: Warn = () => {
       return gate(creds, warn);
     case "coinbase":
       return fetchCoinbaseBalances(creds.apiKey, creds.secret);
+    case "upbit":
+    case "bithumb":
+      return fetchKoreaBalances(source.exchange, creds);
   }
 }

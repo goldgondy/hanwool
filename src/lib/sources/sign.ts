@@ -10,6 +10,7 @@ async function hmac(hash: "SHA-256" | "SHA-512", secret: string, message: string
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 
+export const hmacRaw = hmac;
 export const hmacSha256Hex = async (secret: string, message: string) => hex(await hmac("SHA-256", secret, message));
 export const hmacSha256Base64 = async (secret: string, message: string) => base64(await hmac("SHA-256", secret, message));
 export const hmacSha512Hex = async (secret: string, message: string) => hex(await hmac("SHA-512", secret, message));

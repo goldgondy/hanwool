@@ -74,8 +74,9 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
         } else {
           balances = await fetchEvmBalances(s);
         }
+        // 원화·달러 등 법정화폐 잔고는 가상자산 보유 현황에서 뺀다
         collected.push(
-          ...balances.map((b) => ({ ...b, sourceId: s.id, sourceLabel: s.label })),
+          ...balances.filter((b) => !b.assetKey.startsWith("fiat:")).map((b) => ({ ...b, sourceId: s.id, sourceLabel: s.label })),
         );
       } catch (e) {
         errors.push({

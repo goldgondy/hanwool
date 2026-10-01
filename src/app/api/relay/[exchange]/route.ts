@@ -34,6 +34,13 @@ const RELAYS: Record<string, RelayConfig> = {
     paths: ["/api/v3/account", "/api/v3/myTrades", "/api/v3/capital/deposit/hisrec", "/api/v3/capital/withdraw/history"],
     headers: ["X-MEXC-APIKEY"],
   },
+  // 업비트: 개인 API가 브라우저 요청을 막아 중계한다. JWT에 쿼리 해시가 서명되어 있어 다른 조회로 바꿔 쓸 수 없다.
+  // 키에 등록한 IP에서만 동작하므로 이 서버의 공인 IP를 사용자가 업비트에 등록해야 한다.
+  upbit: {
+    host: "https://api.upbit.com",
+    paths: ["/v1/accounts", "/v1/orders/closed", "/v1/order", "/v1/deposits", "/v1/withdraws"],
+    headers: ["Authorization"],
+  },
   // MEXC 선물은 현물과 다른 서버. 서명에 API 키·시각·쿼리가 들어간다.
   mexcfut: {
     host: "https://contract.mexc.com",
