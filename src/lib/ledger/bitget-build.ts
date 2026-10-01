@@ -54,9 +54,12 @@ export function inferConvention(bills: BitgetBill[]): Convention {
   return score[best] > 0 ? best : "plusFee";
 }
 
-const REWARD = /REBATE|REWARD|BONUS|INTEREST|EARN|STAKING|DIVIDEND|COMMISSION/i;
+const REWARD = /REBATE|REWARD|BONUS|INTEREST|PROFIT|YIELD|EARN|STAKING|DIVIDEND|COMMISSION/i;
 const AIRDROP = /AIRDROP|CANDY|LAUNCHPOOL|GIFT/i;
+// Earn 가입·환매 (현물 ↔ Earn 계정 이동). 이자는 아니다.
+const EARN_MOVE = /SUBSCRI|REDEEM|REDEMPTION/i;
 
+// 비트겟 전체(현물 + 선물 + Earn)를 한 계좌로 본다. 계정 사이 이동은 건너뛰고 잔고 대조도 세 곳을 합친다.
 export function buildBitgetEntries(input: { sourceId: string; bills: BitgetBill[]; deposits: BitgetTransfer[]; withdrawals: BitgetTransfer[] }) {
   const { sourceId, bills } = input;
   const convention = inferConvention(bills);
@@ -85,11 +88,11 @@ export function buildBitgetEntries(input: { sourceId: string; bills: BitgetBill[
         kind = "transfer";
         break;
       case "transfer":
-        kind = "other"; // 현물 ↔ 선물·마진 계정 이동 (잔고 대조는 현물만)
-        break;
+        continue; // 현물 ↔ 선물·Earn·마진 계정 이동
       default:
+        if (EARN_MOVE.test(b.businessType)) continue;
         if (AIRDROP.test(b.businessType)) [kind, tag] = ["income", "airdrop"];
-        else if (REWARD.test(b.businessType)) [kind, tag] = ["income", "reward"];
+        else if (REWARD.test(b.businessType) && total.gt(0)) [kind, tag] = ["income", "reward"];
         else unknown.add(`${b.groupType}/${b.businessType}`);
     }
     const common = { ...base, time, asset: coin, assetKey: coin, groupId, txHash: (b.bizOrderId && txHash.get(b.bizOrderId)) || undefined };
@@ -101,4 +104,95 @@ export function buildBitgetEntries(input: { sourceId: string; bills: BitgetBill[
     if (split) entries.push({ ...common, id: `${sourceId}:bitget:${b.billId}:fee`, amount: fee.toString(), kind: "fee", rawType: `${rawType} fee` });
   }
   return { entries, unknownTypes: [...unknown], convention };
+}
+
+// ── 선물(/api/v2/mix/account/bill) ──
+// CCXT 응답 예시 기준: billId, symbol, amount(부호 있음, 실현 손익·이체 금액), fee(부호 있음), feeByCoupon, businessType, coin, cTime
+// 잔고 변동 = amount + fee. 쿠폰으로 낸 수수료(feeByCoupon)는 잔고에서 나가지 않는다.
+
+export interface BitgetMixBill {
+  billId: string;
+  symbol?: string;
+  amount: string;
+  fee?: string;
+  businessType: string;
+  coin: string;
+  cTime: string;
+}
+
+export function buildBitgetFuturesEntries(sourceId: string, bills: BitgetMixBill[]) {
+  const entries: LedgerEntry[] = [];
+  const unknown = new Set<string>();
+  let derivatives = 0;
+  for (const b of bills) {
+    const t = b.businessType.toLowerCase();
+    if (t.startsWith("trans_")) continue; // 현물·마진 계정과의 이동
+    if (/append_margin|reduce_margin/.test(t)) continue; // 선물 계정 안에서 증거금만 옮김
+    const change = new Decimal(b.amount || 0).plus(b.fee || 0);
+    if (change.isZero()) continue;
+    const derivative = /open_|close_|force_|burst_|delivery_|contract_settle_fee/.test(t);
+    const bonus = /bonus|cash_gift/.test(t);
+    if (!derivative && !bonus) unknown.add(`선물 ${b.businessType}`);
+    if (derivative) derivatives++;
+    entries.push({
+      sourceId,
+      origin: "exchange",
+      location: "Bitget 선물",
+      id: `${sourceId}:bitget:mix:${b.billId}`,
+      time: Number(b.cTime),
+      asset: b.coin.toUpperCase(),
+      assetKey: b.coin.toUpperCase(),
+      amount: change.toString(),
+      kind: "other",
+      groupId: `bitget:mix:${b.billId}`,
+      rawType: `futures ${b.businessType}${b.symbol ? ` (${b.symbol})` : ""}`,
+    });
+  }
+  return { entries, unknownTypes: [...unknown], derivatives };
+}
+
+// ── Earn 이자 (/api/v2/earn/savings/records, orderType=pay_interest) ──
+// 이자가 현물 계정으로 지급되면 현물 장부에도 같은 금액이 찍히므로, 같은 코인·금액·가까운 시각의 현물 보상 기록이 있으면 건너뛴다.
+
+export interface BitgetSavingsRecord {
+  orderId: string;
+  coinName: string;
+  amount: string;
+  ts: string;
+  orderType: string;
+}
+
+const NEAR_MS = 3 * 3600_000;
+
+export function buildBitgetEarnEntries(sourceId: string, records: BitgetSavingsRecord[], spotEntries: LedgerEntry[]) {
+  const spotRewards = spotEntries.filter((e) => e.tag === "reward");
+  const used = new Set<string>();
+  const entries: LedgerEntry[] = [];
+  for (const r of records) {
+    if (r.orderType !== "pay_interest") continue; // 가입·환매는 계정 사이 이동
+    const coin = r.coinName.toUpperCase();
+    const amount = new Decimal(r.amount || 0).abs();
+    if (amount.isZero()) continue;
+    const time = Number(r.ts);
+    const dup = spotRewards.find((e) => !used.has(e.id) && e.asset === coin && amount.eq(e.amount) && Math.abs(e.time - time) < NEAR_MS);
+    if (dup) {
+      used.add(dup.id);
+      continue;
+    }
+    entries.push({
+      sourceId,
+      origin: "exchange",
+      location: "Bitget Earn",
+      id: `${sourceId}:bitget:earn:${r.orderId}`,
+      time,
+      asset: coin,
+      assetKey: coin,
+      amount: amount.toString(),
+      kind: "income",
+      groupId: `bitget:earn:${r.orderId}`,
+      tag: "reward",
+      rawType: "Earn interest",
+    });
+  }
+  return entries;
 }

@@ -25,7 +25,8 @@ const RELAYS: Record<string, RelayConfig> = {
   },
   bitget: {
     host: "https://api.bitget.com",
-    paths: ["/api/v2/spot/account/assets", "/api/v2/spot/account/bills", "/api/v2/spot/wallet/deposit-records", "/api/v2/spot/wallet/withdrawal-records"],
+    paths: ["/api/v2/spot/account/assets", "/api/v2/spot/account/bills", "/api/v2/spot/wallet/deposit-records", "/api/v2/spot/wallet/withdrawal-records",
+      "/api/v2/mix/account/bill", "/api/v2/mix/account/accounts", "/api/v2/earn/savings/records", "/api/v2/earn/account/assets"],
     headers: ["ACCESS-KEY", "ACCESS-SIGN", "ACCESS-TIMESTAMP", "ACCESS-PASSPHRASE"],
   },
   mexc: {
@@ -33,9 +34,16 @@ const RELAYS: Record<string, RelayConfig> = {
     paths: ["/api/v3/account", "/api/v3/myTrades", "/api/v3/capital/deposit/hisrec", "/api/v3/capital/withdraw/history"],
     headers: ["X-MEXC-APIKEY"],
   },
+  // MEXC 선물은 현물과 다른 서버. 서명에 API 키·시각·쿼리가 들어간다.
+  mexcfut: {
+    host: "https://contract.mexc.com",
+    paths: ["/api/v1/private/account/assets", "/api/v1/private/position/list/history_positions"],
+    headers: ["ApiKey", "Request-Time", "Signature"],
+  },
   gate: {
     host: "https://api.gateio.ws",
-    paths: ["/api/v4/spot/accounts", "/api/v4/spot/account_book", "/api/v4/wallet/deposits", "/api/v4/wallet/withdrawals"],
+    paths: ["/api/v4/spot/accounts", "/api/v4/spot/account_book", "/api/v4/wallet/deposits", "/api/v4/wallet/withdrawals",
+      "/api/v4/futures/usdt/account_book", "/api/v4/futures/usdt/accounts", "/api/v4/earn/uni/lends", "/api/v4/earn/uni/interest_records"],
     headers: ["KEY", "Timestamp", "SIGN"],
   },
   // JWT에 요청 경로가 서명되어 있어, 다른 경로로 바꿔 쓸 수 없다.

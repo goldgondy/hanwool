@@ -39,6 +39,44 @@ export interface MexcWithdrawal {
 
 export const MEXC_QUOTES = ["USDT", "USDC"];
 
+// 선물 종료 포지션 (contract.mexc.com /api/v1/private/position/list/history_positions). CCXT 응답 예시 기준.
+// realised = 청산 손익 − 수수료 (예시: 0.3423 − 0.1594 = 0.1829). 결제 통화: XXX_USDT → USDT, 코인 마진 XXX_USD → XXX.
+export interface MexcPosition {
+  positionId: string;
+  symbol: string;
+  realised: string | number;
+  updateTime: string | number;
+  state?: string | number;
+}
+
+export function mexcSettleCoin(symbol: string) {
+  const [base, quote] = symbol.toUpperCase().split("_");
+  return quote === "USDT" || quote === "USDC" ? quote : base;
+}
+
+export function buildMexcFuturesEntries(sourceId: string, positions: MexcPosition[]): LedgerEntry[] {
+  const entries: LedgerEntry[] = [];
+  for (const p of positions) {
+    const amount = new Decimal(p.realised || 0);
+    if (amount.isZero()) continue;
+    const coin = mexcSettleCoin(p.symbol);
+    entries.push({
+      sourceId,
+      origin: "exchange",
+      location: "MEXC 선물",
+      id: `${sourceId}:mexc:pos:${p.positionId}`,
+      time: Number(p.updateTime),
+      asset: coin,
+      assetKey: coin,
+      amount: amount.toString(),
+      kind: "other",
+      groupId: `mexc:pos:${p.positionId}`,
+      rawType: `futures position closed (${p.symbol})`,
+    });
+  }
+  return entries;
+}
+
 export function buildMexcEntries(input: { sourceId: string; trades: { base: string; quote: string; trade: MexcTrade }[]; deposits: MexcDeposit[]; withdrawals: MexcWithdrawal[] }) {
   const { sourceId } = input;
   const entries: LedgerEntry[] = [];

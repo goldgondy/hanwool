@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMexcEntries } from "./mexc-build";
+import { buildMexcEntries, buildMexcFuturesEntries } from "./mexc-build";
 
 describe("buildMexcEntries", () => {
   it("매수·매도 체결을 기준·결제 통화 두 줄과 수수료로 기록한다", () => {
@@ -19,6 +19,18 @@ describe("buildMexcEntries", () => {
       ["trade", "MX", "-5", "mexc:ord:o2"],
       ["trade", "USDT", "16", "mexc:ord:o2"],
       ["fee", "USDT", "-0.016", "mexc:ord:o2"],
+    ]);
+  });
+
+  it("선물 종료 포지션의 실현 손익을 결제 통화로 기록한다", () => {
+    const e = buildMexcFuturesEntries("s", [
+      { positionId: "p1", symbol: "RVN_USDT", realised: "0.1829", updateTime: "1711512553000" },
+      { positionId: "p2", symbol: "BTC_USD", realised: -0.0001, updateTime: 1711512600000 },
+      { positionId: "p3", symbol: "ETH_USDT", realised: "0", updateTime: 1 },
+    ]);
+    expect(e.map((x) => [x.kind, x.asset, x.amount, x.time])).toEqual([
+      ["other", "USDT", "0.1829", 1711512553000],
+      ["other", "BTC", "-0.0001", 1711512600000],
     ]);
   });
 
