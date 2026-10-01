@@ -341,13 +341,13 @@ export default function LedgerPage() {
       <div>
         <h2 className="text-lg font-semibold">원장</h2>
         <p className="text-sm text-stone-500">
-          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 현재는 비트코인·EVM 지갑을 지원하며,
-          거래소는 준비 중입니다.
+          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 지갑(비트코인·EVM·트론·솔라나)과 거래소 API(OKX·바이비트·코인베이스·비트겟·게이트·MEXC),
+          거래소 CSV를 지원합니다.
         </p>
       </div>
 
       {sources && wallets.length === 0 && (
-        <p className="text-sm text-stone-500">연결 계정에서 비트코인 또는 EVM 지갑을 먼저 추가하세요.</p>
+        <p className="text-sm text-stone-500">연결 계정에서 지갑이나 거래소를 먼저 추가하세요.</p>
       )}
 
       {wallets.length > 1 && (

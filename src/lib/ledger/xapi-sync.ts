@@ -1,10 +1,12 @@
+import Decimal from "@/lib/decimal";
 import { db, type XapiSource } from "@/lib/db";
 import { buildBybitEntries, type BybitDeposit, type BybitLog, type BybitWithdrawal } from "@/lib/ledger/bybit-build";
 import { buildCoinbaseEntries, type CoinbaseTx } from "@/lib/ledger/coinbase-build";
 import { coinbaseGet, importCoinbaseKey, listCoinbaseAccounts } from "@/lib/sources/coinbase";
 import { buildBitgetEntries, type BitgetBill, type BitgetTransfer } from "@/lib/ledger/bitget-build";
 import { buildGateEntries, type GateBook, type GateTransfer } from "@/lib/ledger/gate-build";
-import { relay, signBitget, signBybit, signGate, xapiCreds, type Creds } from "@/lib/sources/exchanges";
+import { buildMexcEntries, MEXC_QUOTES, type MexcDeposit, type MexcTrade, type MexcWithdrawal } from "@/lib/ledger/mexc-build";
+import { relay, signBitget, signBybit, signGate, signMexc, xapiCreds, type Creds } from "@/lib/sources/exchanges";
 
 // 거래소 API 거래 내역 동기화 (OKX는 lib/ledger/okx-sync.ts).
 
@@ -14,7 +16,7 @@ export interface XapiSyncResult {
   warnings: string[];
 }
 
-export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget", "gate"]);
+export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget", "gate", "mexc"]);
 
 const DAY = 86_400_000;
 const HISTORY_DAYS = 730; // 바이비트 거래 로그 보관 기간 (2년)
@@ -229,10 +231,79 @@ async function syncGate(source: XapiSource, onProgress: (msg: string) => void): 
   return { added: existing.filter((x) => !x).length, unknownTypes: built.unknownTypes, warnings };
 }
 
+async function mexcGet<T>(c: Creds, path: string, params: Record<string, string>): Promise<T> {
+  await new Promise((r) => setTimeout(r, 150)); // 체결 조회는 가중치가 커서 간격을 둔다
+  return (await relay("mexc", await signMexc(c, path, params, Date.now()))) as T;
+}
+
+async function syncMexc(source: XapiSource, onProgress: (msg: string) => void): Promise<XapiSyncResult> {
+  const c = await xapiCreds(source);
+  const stateKey = `${source.id}:history`;
+  const now = Date.now();
+  const last = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
+  const warnings: string[] = [];
+
+  // 입출금: 최근 90일까지, 7일 단위
+  const depFrom = Math.max(last ? last - DAY : 0, now - 89 * DAY);
+  const deposits: MexcDeposit[] = [];
+  const withdrawals: MexcWithdrawal[] = [];
+  for (let start = depFrom; start < now; start += 7 * DAY) {
+    onProgress("MEXC 입출금 조회 중");
+    const q = { startTime: String(start), endTime: String(Math.min(start + 7 * DAY, now)), limit: "1000" };
+    const dep = await mexcGet<MexcDeposit[] | { msg?: string }>(c, "/api/v3/capital/deposit/hisrec", q);
+    const wd = await mexcGet<MexcWithdrawal[] | { msg?: string }>(c, "/api/v3/capital/withdraw/history", q);
+    if (!Array.isArray(dep)) throw new Error(`MEXC 입금 조회 실패: ${dep.msg ?? "알 수 없는 응답"}`);
+    if (!Array.isArray(wd)) throw new Error(`MEXC 출금 조회 실패: ${wd.msg ?? "알 수 없는 응답"}`);
+    deposits.push(...dep);
+    withdrawals.push(...wd);
+  }
+
+  // 조회할 코인: 현재 보유 + 입출금 + 이전에 원장에 기록된 코인
+  const coins = new Set<string>();
+  const account = await mexcGet<{ balances: { asset: string; free: string; locked: string }[] }>(c, "/api/v3/account", {});
+  for (const b of account.balances) if (!new Decimal(b.free || 0).plus(b.locked || 0).isZero()) coins.add(b.asset.toUpperCase());
+  for (const t of [...deposits, ...withdrawals]) coins.add(t.coin.toUpperCase());
+  for (const e of await db.ledger.where("sourceId").equals(source.id).toArray()) coins.add(e.asset);
+
+  // 체결: 최근 1개월까지, 거래쌍별. 없는 거래쌍은 오류가 나므로 건너뛴다.
+  const tradeFrom = Math.max(last ? last - DAY : 0, now - 29 * DAY);
+  const trades: { base: string; quote: string; trade: MexcTrade }[] = [];
+  const pairs = [...coins].flatMap((coin) => MEXC_QUOTES.filter((q) => q !== coin).map((quote) => [coin, quote] as const));
+  for (const [i, [coin, quote]] of pairs.entries()) {
+    onProgress(`MEXC 체결 조회 중 (${i + 1}/${pairs.length} 거래쌍)`);
+    let start = tradeFrom;
+    for (;;) {
+      let page: MexcTrade[];
+      try {
+        page = await mexcGet<MexcTrade[]>(c, "/api/v3/myTrades", { symbol: `${coin}${quote}`, startTime: String(start), endTime: String(now), limit: "100" });
+      } catch {
+        break; // 존재하지 않는 거래쌍
+      }
+      if (!Array.isArray(page)) break; // 오류 응답 ({code, msg})
+      trades.push(...page.map((trade) => ({ base: coin, quote, trade })));
+      if (page.length < 100) break;
+      start = Math.max(...page.map((t) => t.time)) + 1;
+    }
+  }
+
+  const built = buildMexcEntries({ sourceId: source.id, trades, deposits, withdrawals });
+  const existing = await db.ledger.bulkGet(built.entries.map((e) => e.id));
+  await db.transaction("rw", db.ledger, db.syncState, async () => {
+    await db.ledger.bulkPut(built.entries);
+    await db.syncState.put({ key: stateKey, cursor: String(now), syncedAt: now });
+  });
+  if (last && now - last > 29 * DAY) warnings.push("마지막 동기화 후 1개월이 지나 그 사이 일부 체결을 API로 받을 수 없습니다. 빠진 기간은 MEXC 거래 명세서(CSV)로 보완하세요.");
+  warnings.push(
+    "MEXC API는 체결을 최근 1개월, 입출금을 최근 90일만 주고 USDT·USDC 거래쌍만 조회합니다. 한 달에 한 번 이상 동기화하고, 그 밖의 거래는 CSV로 보완하세요.",
+  );
+  return { added: existing.filter((x) => !x).length, unknownTypes: [], warnings };
+}
+
 export async function syncXapiHistory(source: XapiSource, onProgress: (msg: string) => void = () => {}): Promise<XapiSyncResult> {
   if (source.exchange === "bybit") return syncBybit(source, onProgress);
   if (source.exchange === "coinbase") return syncCoinbase(source, onProgress);
   if (source.exchange === "bitget") return syncBitget(source, onProgress);
   if (source.exchange === "gate") return syncGate(source, onProgress);
+  if (source.exchange === "mexc") return syncMexc(source, onProgress);
   throw new Error("이 거래소의 거래 내역 API는 아직 지원하지 않습니다");
 }

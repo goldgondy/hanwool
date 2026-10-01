@@ -30,7 +30,7 @@ const RELAYS: Record<string, RelayConfig> = {
   },
   mexc: {
     host: "https://api.mexc.com",
-    paths: ["/api/v3/account"],
+    paths: ["/api/v3/account", "/api/v3/myTrades", "/api/v3/capital/deposit/hisrec", "/api/v3/capital/withdraw/history"],
     headers: ["X-MEXC-APIKEY"],
   },
   gate: {
