@@ -1,4 +1,5 @@
 import Decimal from "@/lib/decimal";
+import { fiatAssetKey, isFiat } from "@/lib/assets";
 import type { RawBalance } from "@/lib/sources/types";
 
 // 코인베이스 Advanced Trade API (CDP API 키). 공식 문서 확인: 2026-09-30
@@ -65,41 +66,60 @@ export async function makeCoinbaseJwt(keyName: string, key: CryptoKey, method: s
 
 const randomNonce = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 
-// ── 잔고 ──
+// ── 조회 ──
 
-interface Account {
-  currency: string;
-  available_balance: { value: string };
-  hold?: { value: string };
+// 서명된 GET 요청 (JWT의 uri에는 쿼리를 넣지 않는다)
+export async function coinbaseGet<T>(keyName: string, key: CryptoKey, path: string, params: Record<string, string> = {}): Promise<T> {
+  const jwt = await makeCoinbaseJwt(keyName, key, "GET", path, Math.floor(Date.now() / 1000), randomNonce());
+  const res = await fetch("/api/relay/coinbase", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, query: new URLSearchParams(params).toString(), headers: { Authorization: `Bearer ${jwt}` } }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("코인베이스: API 키 이름이나 개인키가 올바르지 않습니다 (HTTP 401)");
+    throw new Error(`코인베이스 조회 실패 (HTTP ${res.status}) ${text.slice(0, 120)}`);
+  }
+  return JSON.parse(text) as T;
 }
+
+// 법정화폐 지갑(USD, EUR 등)은 원장과 같은 규칙(fiat:USD)으로 표시한다
+export const coinbaseAssetKey = (code: string) => (isFiat(code) ? fiatAssetKey(code) : code.toUpperCase());
+
+// v2 계정 목록: 코인·법정화폐 지갑과 금고(vault)까지 모두 포함한다. 거래 내역도 계정별로 받는다.
+export interface CoinbaseAccount {
+  id: string;
+  currency: { code: string };
+  balance: { amount: string; currency: string };
+  type?: string;
+}
+
+export async function listCoinbaseAccounts(keyName: string, key: CryptoKey): Promise<CoinbaseAccount[]> {
+  const out: CoinbaseAccount[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < 50; page++) {
+    const r = await coinbaseGet<{ data: CoinbaseAccount[]; pagination?: { next_starting_after?: string | null } }>(keyName, key, "/v2/accounts", {
+      limit: "100",
+      ...(after ? { starting_after: after } : {}),
+    });
+    out.push(...r.data);
+    after = r.pagination?.next_starting_after ?? undefined;
+    if (!after) break;
+  }
+  return out;
+}
+
+// ── 잔고 ──
 
 export async function fetchCoinbaseBalances(keyName: string, privateKeyPem: string): Promise<RawBalance[]> {
   const key = await importCoinbaseKey(privateKeyPem);
-  const path = "/api/v3/brokerage/accounts";
   const out: RawBalance[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 20; page++) {
-    const jwt = await makeCoinbaseJwt(keyName, key, "GET", path, Math.floor(Date.now() / 1000), randomNonce());
-    const query = new URLSearchParams({ limit: "250", ...(cursor ? { cursor } : {}) }).toString();
-    const res = await fetch("/api/relay/coinbase", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, query, headers: { Authorization: `Bearer ${jwt}` } }),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      if (res.status === 401) throw new Error("코인베이스: API 키 이름이나 개인키가 올바르지 않습니다 (HTTP 401)");
-      throw new Error(`코인베이스 조회 실패 (HTTP ${res.status}) ${text.slice(0, 120)}`);
-    }
-    const data = JSON.parse(text) as { accounts: Account[]; has_next: boolean; cursor?: string };
-    for (const a of data.accounts) {
-      const amount = new Decimal(a.available_balance?.value || 0).plus(a.hold?.value || 0);
-      if (!amount.isZero()) {
-        out.push({ location: "Coinbase", asset: a.currency.toUpperCase(), rawAsset: a.currency, assetKey: a.currency.toUpperCase(), amount });
-      }
-    }
-    if (!data.has_next || !data.cursor) break;
-    cursor = data.cursor;
+  for (const a of await listCoinbaseAccounts(keyName, key)) {
+    const amount = new Decimal(a.balance?.amount || 0);
+    if (amount.isZero()) continue;
+    const code = a.currency.code.toUpperCase();
+    out.push({ location: "Coinbase", asset: code, rawAsset: code, assetKey: coinbaseAssetKey(code), amount });
   }
   return out;
 }

@@ -1,8 +1,10 @@
 import { db, type XapiSource } from "@/lib/db";
 import { buildBybitEntries, type BybitDeposit, type BybitLog, type BybitWithdrawal } from "@/lib/ledger/bybit-build";
+import { buildCoinbaseEntries, type CoinbaseTx } from "@/lib/ledger/coinbase-build";
+import { coinbaseGet, importCoinbaseKey, listCoinbaseAccounts } from "@/lib/sources/coinbase";
 import { relay, signBybit, xapiCreds, type Creds } from "@/lib/sources/exchanges";
 
-// 거래소 API 거래 내역 동기화. 현재 바이비트 지원 (나머지 거래소는 순차 추가).
+// 거래소 API 거래 내역 동기화 (OKX는 lib/ledger/okx-sync.ts).
 
 export interface XapiSyncResult {
   added: number;
@@ -10,7 +12,7 @@ export interface XapiSyncResult {
   warnings: string[];
 }
 
-export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit"]);
+export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase"]);
 
 const DAY = 86_400_000;
 const HISTORY_DAYS = 730; // 바이비트 거래 로그 보관 기간 (2년)
@@ -79,7 +81,49 @@ async function syncBybit(source: XapiSource, onProgress: (msg: string) => void):
   return { added: existing.filter((x) => !x).length, unknownTypes: built.unknownTypes, warnings };
 }
 
+// 코인베이스: 계정(지갑)별 거래 내역을 최신순으로, 지난 동기화 하루 전까지 읽는다
+async function syncCoinbase(source: XapiSource, onProgress: (msg: string) => void): Promise<XapiSyncResult> {
+  const c = await xapiCreds(source);
+  const key = await importCoinbaseKey(c.secret);
+  const stateKey = `${source.id}:history`;
+  const now = Date.now();
+  const last = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
+  const from = last ? last - DAY : 0;
+
+  onProgress("코인베이스 계정 목록 조회 중");
+  const accounts = await listCoinbaseAccounts(c.apiKey, key);
+  const txs: CoinbaseTx[] = [];
+  for (const [i, a] of accounts.entries()) {
+    onProgress(`코인베이스 내역 조회 중 (${i + 1}/${accounts.length} 계정)`);
+    let after: string | undefined;
+    for (;;) {
+      const r = await coinbaseGet<{ data: CoinbaseTx[]; pagination?: { next_starting_after?: string | null } }>(c.apiKey, key, `/v2/accounts/${a.id}/transactions`, {
+        limit: "100",
+        order: "desc",
+        ...(after ? { starting_after: after } : {}),
+      });
+      const fresh = r.data.filter((t) => Date.parse(t.created_at) >= from);
+      txs.push(...fresh);
+      after = r.pagination?.next_starting_after ?? undefined;
+      if (!after || fresh.length < r.data.length) break;
+    }
+  }
+
+  const built = buildCoinbaseEntries(source.id, txs);
+  const existing = await db.ledger.bulkGet(built.entries.map((e) => e.id));
+  await db.transaction("rw", db.ledger, db.syncState, async () => {
+    await db.ledger.bulkPut(built.entries);
+    await db.syncState.put({ key: stateKey, cursor: String(now), syncedAt: now });
+  });
+  const warnings = [...built.warnings];
+  if (built.entries.some((e) => e.rawType === "Card/bank payment" || e.rawType === "Payout")) {
+    warnings.push("카드·은행으로 직접 사고판 거래는 코인베이스가 표시한 결제 금액을 대가로 넣었습니다 (수수료 제외 금액일 수 있음).");
+  }
+  return { added: existing.filter((x) => !x).length, unknownTypes: built.unknownTypes, warnings };
+}
+
 export async function syncXapiHistory(source: XapiSource, onProgress: (msg: string) => void = () => {}): Promise<XapiSyncResult> {
   if (source.exchange === "bybit") return syncBybit(source, onProgress);
+  if (source.exchange === "coinbase") return syncCoinbase(source, onProgress);
   throw new Error("이 거래소의 거래 내역 API는 아직 지원하지 않습니다");
 }

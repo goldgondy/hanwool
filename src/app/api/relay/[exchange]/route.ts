@@ -7,6 +7,7 @@
 interface RelayConfig {
   host: string;
   paths: string[];
+  patterns?: RegExp[]; // 경로에 ID가 들어가는 엔드포인트
   headers: string[]; // 전달을 허용하는 인증 헤더
 }
 
@@ -40,7 +41,8 @@ const RELAYS: Record<string, RelayConfig> = {
   // JWT에 요청 경로가 서명되어 있어, 다른 경로로 바꿔 쓸 수 없다.
   coinbase: {
     host: "https://api.coinbase.com",
-    paths: ["/api/v3/brokerage/accounts"],
+    paths: ["/api/v3/brokerage/accounts", "/v2/accounts"],
+    patterns: [/^\/v2\/accounts\/[A-Za-z0-9-]{1,64}\/transactions$/],
     headers: ["Authorization"],
   },
 };
@@ -60,7 +62,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ exc
   if (typeof path !== "string" || typeof query !== "string" || typeof headers !== "object" || headers === null) {
     return Response.json({ error: "잘못된 요청" }, { status: 400 });
   }
-  if (!config.paths.includes(path)) {
+  if (!config.paths.includes(path) && !config.patterns?.some((p) => p.test(path))) {
     return Response.json({ error: "허용되지 않은 엔드포인트" }, { status: 403 });
   }
 
