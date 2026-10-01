@@ -16,14 +16,29 @@ async function hmacSha256Base64(secret: string, message: string) {
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 
-interface Credentials {
+export interface Credentials {
   apiKey: string;
   secret: string;
   passphrase: string;
 }
 
+export async function okxCreds(source: OkxSource): Promise<Credentials> {
+  return { apiKey: source.apiKey, secret: await decrypt(source.encSecret), passphrase: await decrypt(source.encPassphrase) };
+}
+
+// 내역 API는 2초에 5회까지라 (bills-archive) 요청 사이 간격을 둔다
+const MIN_INTERVAL_MS = 450;
+let nextSlot = 0;
+async function pace() {
+  const now = Date.now();
+  const slot = Math.max(now, nextSlot);
+  nextSlot = slot + MIN_INTERVAL_MS;
+  if (slot > now) await new Promise((r) => setTimeout(r, slot - now));
+}
+
 // 서명 원문: timestamp + METHOD + requestPath(쿼리 포함) + body
-async function signedGet<T>(creds: Credentials, path: string): Promise<T> {
+export async function signedGet<T>(creds: Credentials, path: string): Promise<T> {
+  await pace();
   const timestamp = new Date().toISOString();
   const sign = await hmacSha256Base64(creds.secret, `${timestamp}GET${path}`);
 
@@ -46,11 +61,7 @@ async function signedGet<T>(creds: Credentials, path: string): Promise<T> {
 }
 
 export async function fetchOkxBalances(source: OkxSource): Promise<RawBalance[]> {
-  const creds: Credentials = {
-    apiKey: source.apiKey,
-    secret: await decrypt(source.encSecret),
-    passphrase: await decrypt(source.encPassphrase),
-  };
+  const creds = await okxCreds(source);
 
   const [trading, funding, savings] = await Promise.all([
     signedGet<{ details: { ccy: string; eq: string }[] }[]>(

@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type SolanaSource, type TronSource, type XapiSource } from "@/lib/db";
+import { db, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type OkxSource, type SolanaSource, type TronSource, type XapiSource } from "@/lib/db";
 import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync";
+import { syncOkxHistory } from "@/lib/ledger/okx-sync";
+import { fetchOkxBalances } from "@/lib/sources/okx";
 import { fetchTronBalances, syncTronHistory } from "@/lib/ledger/tron-sync";
 import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
 import { API_EXCHANGES, fetchXapiBalances } from "@/lib/sources/exchanges";
@@ -15,8 +17,8 @@ import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
 
-type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource;
-type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource;
+type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource | OkxSource;
+type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource | OkxSource;
 
 // 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
 interface SyncLine {
@@ -36,6 +38,12 @@ async function syncSource(source: SyncableSource, onProgress: (msg: string) => v
   if (source.kind === "solana") {
     const r = await syncSolanaHistory(source, onProgress);
     return [{ title: "Solana", summary: `새 항목 ${r.added}건 반영`, notes: r.warnings }];
+  }
+  if (source.kind === "okx") {
+    const r = await syncOkxHistory(source, onProgress);
+    const notes = [...r.warnings];
+    if (r.unknownTypes.length) notes.push(`처음 보는 유형(검토 필요로 들어감): ${r.unknownTypes.join(", ")}`);
+    return [{ title: "OKX", summary: `새 항목 ${r.added}건 반영`, notes }];
   }
   if (source.kind === "xapi") {
     const r = await syncXapiHistory(source, onProgress);
@@ -61,6 +69,7 @@ async function syncSource(source: SyncableSource, onProgress: (msg: string) => v
 
 function fetchBalances(source: SyncableSource, onProgress: (msg: string) => void): Promise<RawBalance[]> {
   if (source.kind === "xapi") return fetchXapiBalances(source);
+  if (source.kind === "okx") return fetchOkxBalances(source);
   if (source.kind === "tron") return fetchTronBalances(source);
   if (source.kind === "solana") return fetchSolanaBalances(source);
   return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
@@ -219,7 +228,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          {source.kind === "xapi" && (
+          {(source.kind === "xapi" || source.kind === "okx") && (
             <div className="w-full">
               <VaultPanel />
             </div>
@@ -322,7 +331,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
   const wallets = (sources ?? []).filter(
-    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "csv" || s.kind === "xapi",
+    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "csv" || s.kind === "xapi" || s.kind === "okx",
   );
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
@@ -353,7 +362,7 @@ export default function LedgerPage() {
                   : "border-stone-300 dark:border-stone-700"
               }`}
             >
-              {s.label} {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" ? "API" : "CSV"}
+              {s.label} {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" || s.kind === "okx" ? "API" : "CSV"}
             </button>
           ))}
         </div>

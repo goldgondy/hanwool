@@ -9,6 +9,13 @@ const ALLOWED = new Set([
   "/api/v5/account/balance",
   "/api/v5/asset/balances",
   "/api/v5/finance/savings/balance",
+  // 거래 내역 (lib/ledger/okx-history.ts)
+  "/api/v5/account/bills-archive",
+  "/api/v5/asset/bills",
+  "/api/v5/asset/bills-history",
+  "/api/v5/asset/deposit-history",
+  "/api/v5/asset/withdrawal-history",
+  "/api/v5/finance/savings/lending-history",
 ]);
 
 export async function POST(request: Request) {
