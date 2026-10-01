@@ -2,6 +2,7 @@ import Decimal from "@/lib/decimal";
 import { db, isExchangeKind, type Holding, type Snapshot } from "@/lib/db";
 import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
 import { csvSourcesShadowedByApi } from "@/lib/ledger/dedup";
+import { fetchSolanaBalances } from "@/lib/ledger/solana-sync";
 import { fetchTronBalances } from "@/lib/ledger/tron-sync";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
@@ -68,6 +69,8 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           balances = await ledgerBalances(s.id, s.label);
         } else if (s.kind === "tron") {
           balances = await fetchTronBalances(s);
+        } else if (s.kind === "solana") {
+          balances = await fetchSolanaBalances(s);
         } else {
           balances = await fetchEvmBalances(s);
         }

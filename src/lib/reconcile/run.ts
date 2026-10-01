@@ -4,6 +4,7 @@ import { db, getSetting, isExchangeKind, setSetting, type LedgerEntry, type Reco
 import { fetchBtcBalances, syncBtcHistory } from "@/lib/ledger/btc-sync";
 import { applyCsvCoverage } from "@/lib/ledger/dedup";
 import { syncEvmHistory } from "@/lib/ledger/evm-sync";
+import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync";
 import { fetchTronBalances, syncTronHistory } from "@/lib/ledger/tron-sync";
 import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
 import { reconcile } from "@/lib/ledger/reconcile";
@@ -31,6 +32,8 @@ async function liveBalances(s: LiveSource): Promise<RawBalance[]> {
       return fetchEvmBalances(s);
     case "tron":
       return fetchTronBalances(s);
+    case "solana":
+      return fetchSolanaBalances(s);
   }
 }
 
@@ -42,6 +45,7 @@ async function syncBeforeReconcile(sources: LiveSource[], onProgress: (msg: stri
       if (s.kind === "evm") await syncEvmHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "btc") await syncBtcHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "tron") await syncTronHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+      else if (s.kind === "solana") await syncSolanaHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "xapi" && HISTORY_SUPPORTED.has(s.exchange) && isUnlocked()) await syncXapiHistory(s, (m) => onProgress(`${s.label}: ${m}`));
     } catch (e) {
       errors.set(s.id, `내역 동기화 실패 (오래된 원장으로 대사함): ${e instanceof Error ? e.message : e}`);

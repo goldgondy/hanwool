@@ -9,6 +9,7 @@ import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
 import { discoverWallets, requestAddresses, type WalletDetail } from "@/lib/wallet/eip6963";
 import { isTronAddress } from "@/lib/tron/address";
+import { isSolanaAddress } from "@/lib/solana/address";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
 import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
@@ -122,7 +123,67 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", csv: "CSV" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "CSV" } as const;
+
+function SolanaForm() {
+  const [label, setLabel] = useState("솔라나 지갑");
+  const [address, setAddress] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const [key, setKey] = useState("");
+  const savedKey = useLiveQuery(() => getSetting("heliusKey"), []);
+  const valid = isSolanaAddress(address);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!valid) return;
+    const addr = address.trim();
+    const existing = (await db.sources.toArray()).find((s) => s.kind === "solana" && s.address === addr);
+    if (existing) {
+      setNotice(`이미 연결된 주소입니다 (${existing.label}).`);
+      return;
+    }
+    await db.sources.add({ id: crypto.randomUUID(), kind: "solana", label: label.trim() || "솔라나 지갑", address: addr, createdAt: Date.now() });
+    setNotice(`${label} (${addr.slice(0, 4)}…${addr.slice(-4)})를 연결했습니다.`);
+    setAddress("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">솔라나 지갑 (팬텀, 솔플레어 등)</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        지갑 주소를 입력하세요. SOL·토큰·스테이킹(보상 포함)을 함께 불러옵니다. 공식 솔라나 노드가 브라우저 조회를 막고 있어
+        조회 요청이 이 서비스의 중계 서버를 거칩니다 (주소는 저장하지 않음). Helius 무료 키를 넣으면 브라우저에서 바로 조회하고 더
+        빠릅니다. <b>복구 문구나 개인키는 절대 입력하지 마세요.</b>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
+      <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="지갑 주소" required />
+      {address && !valid && <p className="text-xs text-red-600">솔라나 주소 형식이 아닙니다.</p>}
+      {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
+      <button className={button} disabled={!valid}>
+        추가
+      </button>
+      <button type="button" className="block text-xs text-stone-500 underline" onClick={() => setShowKey(!showKey)}>
+        Helius API 키 (선택{savedKey ? ", 저장됨" : ""})
+      </button>
+      {showKey && (
+        <div className="flex gap-2">
+          <input className={input} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="helius.dev에서 무료 키를 받아 넣으세요. 비우고 저장하면 지웁니다" />
+          <button
+            type="button"
+            className="shrink-0 rounded-lg border border-stone-300 px-3 text-xs dark:border-stone-700"
+            onClick={async () => {
+              await setSetting("heliusKey", key.trim());
+              setKey("");
+            }}
+          >
+            저장
+          </button>
+        </div>
+      )}
+    </form>
+  );
+}
 
 function TronForm() {
   const [label, setLabel] = useState("트론 지갑");
@@ -813,7 +874,7 @@ export default function SourcesPage() {
                       ? `파일 ${s.imports.length}개 가져옴`
                       : s.kind === "xapi"
                         ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
-                        : s.kind === "tron"
+                        : s.kind === "tron" || s.kind === "solana"
                           ? `${s.address.slice(0, 6)}…${s.address.slice(-4)}`
                           : mask(s.apiKey)}
               </code>
@@ -834,6 +895,7 @@ export default function SourcesPage() {
         <BtcForm />
         <EvmForm />
         <TronForm />
+        <SolanaForm />
         <CsvImportCard />
         <BinanceForm />
         <OkxForm />

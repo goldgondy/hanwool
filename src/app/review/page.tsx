@@ -34,6 +34,7 @@ function txUrl(groupKey: string) {
   if (!hash) return undefined;
   if (chain === "btc") return `https://mempool.space/tx/${hash}`;
   if (chain === "tron") return `https://tronscan.org/#/transaction/${hash}`;
+  if (chain === "sol") return hash === "reward" ? undefined : `https://solscan.io/tx/${hash}`;
   const evm = EVM_CHAINS[chain as EvmChain];
   return evm ? `${evm.explorer}/tx/${hash}` : undefined;
 }

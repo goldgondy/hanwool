@@ -7,7 +7,7 @@ import type { Classification, Decision } from "./types";
 
 const isFiatKey = (assetKey: string) => assetKey.startsWith("fiat:");
 
-// 체인별 공식 USDT·USDC 컨트랙트 (assetKey 형식). EVM은 소문자, 트론은 Base58 그대로.
+// 체인별 공식 USDT·USDC 컨트랙트 (assetKey 형식). EVM은 소문자, 트론·솔라나는 Base58 그대로.
 export const OFFICIAL_STABLES: Record<string, Set<string>> = {
   USDT: new Set([
     "eth:0xdac17f958d2ee523a2206206994597c13d831ec7",
@@ -16,6 +16,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "polygon:0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     "base:0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
     "tron:TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "sol:Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
   ]),
   USDC: new Set([
     "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -24,6 +25,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "polygon:0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
     "base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     "tron:TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
+    "sol:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   ]),
 };
 
@@ -32,7 +34,7 @@ function isImpersonatingStable(e: LedgerEntry) {
   const official = OFFICIAL_STABLES[e.asset.toUpperCase()];
   if (!official || e.origin === "exchange") return false;
   const [chain, contract] = e.assetKey.split(":");
-  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, tron: 1 })) return false;
+  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, tron: 1, sol: 1 })) return false;
   return !official.has(e.assetKey);
 }
 
@@ -84,6 +86,11 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
       if (fiatIn && !fiatOut) return { ...base, category: "sell_fiat", status: "confirmed", rule: "R2", reason: "거래소 법정화폐 매도 체결" };
       return { ...base, category: "trade", status: "confirmed", rule: "R1", reason: "거래소 체결 기록" };
     }
+  }
+
+  // R3: 블록체인이 직접 지급한 보상 (솔라나 스테이킹 보상, 트론 투표 보상 수령). 프로토콜 기록이라 추정이 아니다.
+  if (legs.every((e) => e.tag === "reward" && e.kind === "income")) {
+    return { ...base, category: "reward", status: "confirmed", rule: "R3", reason: "블록체인 스테이킹·투표 보상" };
   }
 
   // 법정화폐만 오가는 입출금 (예: 업비트 원화 입금) → 과세 대상 아님

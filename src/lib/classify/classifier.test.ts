@@ -74,6 +74,11 @@ describe("classifyGroup", () => {
     expect(real.category).toBe("external_in");
   });
 
+  it("R3: 블록체인 스테이킹 보상은 보상으로 확정", () => {
+    const c = cls([e({ amount: "0.0002", asset: "SOL", assetKey: "sol:native", kind: "income", tag: "reward", counterparty: "StakeAcc" })]);
+    expect([c.category, c.status, c.rule]).toEqual(["reward", "confirmed", "R3"]);
+  });
+
   it("R12: 모르는 곳에서 받은 ETH는 검토 필요", () => {
     const c = cls([e({ amount: "1", counterparty: STRANGER })]);
     expect([c.category, c.status, c.rule]).toEqual(["external_in", "needs_review", "R12"]);
