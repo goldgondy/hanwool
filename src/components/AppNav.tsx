@@ -133,9 +133,9 @@ function NavBody({ onNavigate }: { onNavigate: () => void }) {
 function Brand() {
   return (
     <Link href="/" className="flex items-center gap-2.5">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white shadow-sm">₩</span>
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-lg font-bold text-white shadow-sm">₿</span>
       <span className="leading-tight">
-        <span className="block text-sm font-bold">Crypto Tax Engine</span>
+        <span className="block text-base font-bold tracking-tight">B택스</span>
         <span className="block text-[11px] text-stone-500">가상자산 세금 준비</span>
       </span>
     </Link>

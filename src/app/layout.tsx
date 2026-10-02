@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crypto Tax Engine",
+  title: { default: "B택스 · 가상자산 세금 준비", template: "%s · B택스" },
   description: "해외 거래소·DeFi 이용자를 위한 가상자산 과세 준비 도구",
 };
 

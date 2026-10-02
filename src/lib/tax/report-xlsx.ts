@@ -50,7 +50,7 @@ export function assetSummary(disposals: Disposal[]): AssetRow[] {
 export async function buildTaxWorkbook({ mode, engine, built }: TaxReportInput): Promise<Blob> {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
-  wb.creator = "crypto-tax-engine";
+  wb.creator = "B택스";
   wb.created = new Date();
   const disposals = engine.disposals.filter((d) => d.taxable).sort((a, b) => a.time - b.time);
   const money = "#,##0";
