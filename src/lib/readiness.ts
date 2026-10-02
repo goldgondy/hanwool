@@ -2,6 +2,7 @@ import Decimal from "@/lib/decimal";
 import { db } from "@/lib/db";
 import { loadClassifiedGroups } from "@/lib/classify/load";
 import { ignoredDiffs } from "@/lib/reconcile/run";
+import { missingFiles } from "@/lib/importers/kits";
 
 // 신고 준비 현황: 홈 화면의 단계별 점검과 메뉴의 표시에 쓴다.
 
@@ -22,6 +23,7 @@ export async function reconcileStatus(): Promise<ReconcileStatus> {
 
 export interface Readiness {
   sources: number;
+  missingFiles: string[]; // 거래소 파일 준비 목록에서 빠진 파일 (예: "OKX (파일): 입금 내역")
   lastSync: number | null;
   reconcile: ReconcileStatus;
   review: { needsReview: number; suggested: number; total: number };
@@ -30,14 +32,15 @@ export interface Readiness {
 
 export async function loadReadiness(): Promise<Readiness> {
   const [sources, states, reconcile, groups, snapshot] = await Promise.all([
-    db.sources.count(),
+    db.sources.toArray(),
     db.syncState.toArray(),
     reconcileStatus(),
     loadClassifiedGroups(),
     db.snapshots.orderBy("takenAt").last(),
   ]);
   return {
-    sources,
+    sources: sources.length,
+    missingFiles: missingFiles(sources),
     lastSync: states.length ? Math.max(...states.map((s) => s.syncedAt)) : null,
     reconcile,
     review: {

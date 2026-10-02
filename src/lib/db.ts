@@ -59,7 +59,8 @@ export interface CsvSource {
   kind: "csv";
   label: string;
   exchange: string; // 변환기 거래소 ID (lib/importers)
-  imports: { at: number; fileName: string; format: string; rows: number; added: number }[];
+  // parts: 준비 목록의 어느 부분인지 (예: okx:deposit), from·to: 파일이 담은 기간
+  imports: { at: number; fileName: string; format: string; rows: number; added: number; parts?: string[]; from?: number; to?: number }[];
   // 같은 거래소 계정의 API 연결. 연결되면 CSV가 덮는 기간은 CSV를, 그 밖은 API 내역을 쓰고 (lib/ledger/dedup.ts),
   // 잔고는 API 실시간 잔고만 쓴다.
   linkedSourceId?: string;

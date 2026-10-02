@@ -39,9 +39,14 @@ function steps(r: Readiness): Step[] {
       n: 1,
       title: "계정 연결",
       href: "/sources",
-      state: r.sources > 0 ? "done" : "todo",
-      detail: r.sources > 0 ? `거래소·지갑 ${r.sources}개 연결됨` : "거래소 API 키, 지갑 주소, 거래내역 파일을 연결하세요",
-      action: r.sources > 0 ? "계정 추가" : "연결하기",
+      state: r.sources === 0 ? "todo" : r.missingFiles.length ? "warn" : "done",
+      detail:
+        r.sources === 0
+          ? "거래소 API 키, 지갑 주소, 거래내역 파일을 연결하세요"
+          : r.missingFiles.length
+            ? `빠진 파일: ${r.missingFiles.slice(0, 2).join(", ")}${r.missingFiles.length > 2 ? ` 외 ${r.missingFiles.length - 2}개` : ""}`
+            : `거래소·지갑 ${r.sources}개 연결됨`,
+      action: r.sources === 0 ? "연결하기" : r.missingFiles.length ? "파일 올리기" : "계정 추가",
     },
     {
       n: 2,

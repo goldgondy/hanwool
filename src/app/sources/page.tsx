@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type LedgerEntry, type Source } from "@/lib/db";
 import { ADAPTERS, detect, detectRows, PLANNED_EXCHANGES } from "@/lib/importers";
+import { KITS, kitStatus, partsOf, type KitRow, type PartState } from "@/lib/importers/kits";
 import { decodeText } from "@/lib/importers/csv";
 import { isOldXls, isXlsx, readXlsxRows } from "@/lib/importers/xlsx";
 import { parseUpbitPaste, upbitHistory } from "@/lib/importers/upbit";
@@ -128,7 +129,7 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "CSV", manual: "직접 입력" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "파일", manual: "직접 입력" } as const;
 
 function SolanaForm() {
   const [label, setLabel] = useState("솔라나 지갑");
@@ -432,62 +433,123 @@ interface CsvPreview {
   adapter: CsvAdapter;
   table: CsvTable;
   result: ImportResult;
+  parts: string[];
+}
+
+// 거래소별 가져오기 설정 (같은 거래소 파일 여러 개는 한 계정에 모은다)
+interface GroupSetting {
+  target: string; // "new" 또는 합칠 CSV 계정 ID
+  label: string;
+  link: string; // 같은 계정의 API 연결 ID ("" = 연결 안 함)
+}
+
+type Failed = { fileName: string; message: string; headers?: string[] };
+
+const fmtDay = (t: number) => new Date(t).toLocaleDateString("ko-KR");
+
+const PART_STYLE: Record<PartState, string> = {
+  done: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
+  api: "border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300",
+  missing: "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+};
+
+// 거래소 파일 준비 목록: 필요한 파일마다 올렸는지, 담긴 기간, 빠졌으면 받는 법. pending: 지금 가져오려는 파일의 부분
+function KitChecklist({ rows, pending = [] }: { rows: KitRow[]; pending?: string[] }) {
+  return (
+    <ul className="flex flex-wrap gap-2">
+      {rows.map((p) => {
+        const waiting = pending.includes(p.key) && p.state !== "done";
+        const state: PartState = waiting ? "done" : p.state;
+        return (
+          <li key={p.key} className={`rounded-lg border px-2.5 py-1.5 text-xs ${PART_STYLE[state]}`}>
+            <span className="font-semibold">
+              {state === "done" ? "✓" : state === "api" ? "↻" : "!"} {p.label}
+            </span>
+            <span className="ml-1.5 opacity-80">
+              {waiting
+                ? "가져오기 대기"
+                : state === "done"
+                  ? p.from !== undefined && p.to !== undefined
+                    ? `${fmtDay(p.from)} ~ ${fmtDay(p.to)}`
+                    : `파일 ${p.files}개`
+                  : state === "api"
+                    ? "API로 최근 기록 보완 · 오래된 기간은 파일 필요"
+                    : `없음 · ${p.howTo}`}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 function CsvImportCard() {
   const allSources = useLiveQuery(() => db.sources.toArray(), []);
   const csvSources = allSources?.filter((s): s is CsvSource => s.kind === "csv");
-  const [preview, setPreview] = useState<CsvPreview | null>(null);
-  const [unknownHeaders, setUnknownHeaders] = useState<string[] | null>(null);
-  const [target, setTarget] = useState<string>("new");
-  const [label, setLabel] = useState("");
-  const [link, setLink] = useState<string>(""); // 같은 계정의 API 연결 ID ("" = 연결 안 함)
-  const apiSources = (allSources ?? []).filter((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === preview?.adapter.exchange);
-  const [done, setDone] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<CsvPreview[]>([]);
+  const [settings, setSettings] = useState<Record<string, GroupSetting>>({});
+  const [failed, setFailed] = useState<Failed[]>([]);
+  const [done, setDone] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [paste, setPaste] = useState("");
 
   function reset() {
-    setPreview(null);
-    setUnknownHeaders(null);
-    setDone(null);
+    setPreviews([]);
+    setFailed([]);
+    setDone([]);
     setError(null);
   }
 
   // 미리보기용 변환 (sourceId는 저장할 때 확정)
-  function showPreview(fileName: string, adapter: CsvAdapter, table: CsvTable, extraWarning?: string) {
+  function makePreview(fileName: string, adapter: CsvAdapter, table: CsvTable, extraWarning?: string): CsvPreview {
     const result = adapter.convert(table, "preview");
     if (extraWarning) result.warnings.unshift(extraWarning);
-    setPreview({ fileName, adapter, table, result });
-    const same = (csvSources ?? []).find((s) => s.exchange === adapter.exchange);
-    setTarget(same ? same.id : "new");
-    setLabel(`${adapter.exchangeName} (${adapter.id.includes("paste") ? "붙여넣기" : "파일"})`);
-    // 기존 연결을 유지하고, 없으면 같은 거래소의 첫 API 연결을 기본값으로 제안한다
-    const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === adapter.exchange);
-    setLink(same?.linkedSourceId ?? api?.id ?? "");
+    return { fileName, adapter, table, result, parts: partsOf(adapter, table) };
   }
 
-  async function onFile(file: File | undefined) {
-    reset();
-    if (!file) return;
+  // 거래소마다 기본 설정: 같은 거래소의 기존 파일 계정에 합치고, 같은 거래소 API가 있으면 같은 계정으로 연결
+  function showPreviews(list: CsvPreview[]) {
+    setPreviews(list);
+    const next: Record<string, GroupSetting> = {};
+    for (const p of list) {
+      const x = p.adapter.exchange;
+      if (next[x]) continue;
+      const same = (csvSources ?? []).find((s) => s.exchange === x);
+      const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === x);
+      next[x] = {
+        target: same ? same.id : "new",
+        label: `${p.adapter.exchangeName} (${p.adapter.id.includes("paste") ? "붙여넣기" : "파일"})`,
+        link: same?.linkedSourceId ?? api?.id ?? "",
+      };
+    }
+    setSettings(next);
+  }
+
+  async function readFile(file: File): Promise<CsvPreview | Failed> {
     const buf = await file.arrayBuffer();
     if (isOldXls(buf)) {
-      setError("옛 엑셀 형식(.xls)은 읽을 수 없습니다. 엑셀에서 파일을 열고 ‘다른 이름으로 저장 → Excel 통합 문서(.xlsx)’로 저장해 올리거나, 표 전체를 복사해 아래 ‘붙여넣기’ 칸에 넣으세요.");
-      return;
+      return { fileName: file.name, message: "옛 엑셀 형식(.xls)입니다. 엑셀에서 ‘다른 이름으로 저장 → Excel 통합 문서(.xlsx)’로 저장해 올리거나, 표를 복사해 ‘붙여넣기’ 칸에 넣으세요." };
     }
-    let found;
     try {
-      found = isXlsx(buf) ? detectRows(await readXlsxRows(buf)) : detect(decodeText(buf));
+      const found = isXlsx(buf) ? detectRows(await readXlsxRows(buf)) : detect(decodeText(buf));
+      if (!found.adapter) return { fileName: file.name, message: "지원하지 않는 형식입니다.", headers: found.headers };
+      return makePreview(file.name, found.adapter, found.table);
     } catch (e) {
-      setError(`파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      return { fileName: file.name, message: `읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
     }
-    if (!found.adapter) {
-      setUnknownHeaders(found.headers);
-      return;
-    }
-    showPreview(file.name, found.adapter, found.table);
+  }
+
+  async function onFiles(files: FileList | null | undefined) {
+    reset();
+    const list = [...(files ?? [])];
+    if (!list.length) return;
+    setBusy(true);
+    const results = await Promise.all(list.map(readFile));
+    setBusy(false);
+    setFailed(results.filter((r): r is Failed => !("adapter" in r)));
+    showPreviews(results.filter((r): r is CsvPreview => "adapter" in r));
   }
 
   function onPaste() {
@@ -495,7 +557,7 @@ function CsvImportCard() {
     // 엑셀에서 복사한 표(탭으로 나뉜 칸)는 파일과 같은 변환기로 읽는다 (예: 빗썸 엑셀)
     const asTable = detect(paste);
     if (asTable.adapter && asTable.adapter !== upbitHistory) {
-      showPreview(`${asTable.adapter.exchangeName} 붙여넣기 ${new Date().toLocaleString("ko-KR")}`, asTable.adapter, asTable.table);
+      showPreviews([makePreview(`${asTable.adapter.exchangeName} 붙여넣기 ${new Date().toLocaleString("ko-KR")}`, asTable.adapter, asTable.table)]);
       return;
     }
     const parsed = parseUpbitPaste(paste);
@@ -503,55 +565,105 @@ function CsvImportCard() {
       setError("거래 기록을 찾지 못했습니다. 업비트는 투자내역 → 거래내역 표를, 빗썸은 엑셀의 표를 열 이름 줄까지 포함해 복사했는지 확인하세요.");
       return;
     }
-    showPreview(
-      `업비트 붙여넣기 ${new Date().toLocaleString("ko-KR")}`,
-      upbitHistory,
-      parsed.table,
-      parsed.skipped ? `기록으로 읽지 못한 조각 ${parsed.skipped}개는 건너뛰었습니다.` : undefined,
-    );
+    showPreviews([
+      makePreview(
+        `업비트 붙여넣기 ${new Date().toLocaleString("ko-KR")}`,
+        upbitHistory,
+        parsed.table,
+        parsed.skipped ? `기록으로 읽지 못한 조각 ${parsed.skipped}개는 건너뛰었습니다.` : undefined,
+      ),
+    ]);
   }
 
   async function onImport() {
-    if (!preview) return;
+    if (!previews.length) return;
     setError(null);
+    setBusy(true);
+    const messages: string[] = [];
     try {
-      const { adapter } = preview;
-      let source: CsvSource;
-      if (target === "new") {
-        source = { id: crypto.randomUUID(), kind: "csv", label: label.trim() || `${adapter.exchangeName} (CSV)`, exchange: adapter.exchange, imports: [], createdAt: Date.now() };
-      } else {
-        source = (csvSources ?? []).find((s) => s.id === target)!;
+      for (const [exchange, set] of Object.entries(settings)) {
+        const files = previews.filter((p) => p.adapter.exchange === exchange);
+        if (!files.length) continue;
+        let source: CsvSource =
+          set.target === "new"
+            ? { id: crypto.randomUUID(), kind: "csv", label: set.label.trim() || `${files[0].adapter.exchangeName} (파일)`, exchange, imports: [], createdAt: Date.now() }
+            : ((await db.sources.get(set.target)) as CsvSource);
+        for (const p of files) {
+          // 실제 계정 ID로 다시 변환해 결정적 ID를 확정한다
+          const { entries, range } = p.adapter.convert(p.table, source.id);
+          const existing = await db.ledger.bulkGet(entries.map((e) => e.id));
+          const added = existing.filter((x) => !x).length;
+          const imp = { at: Date.now(), fileName: p.fileName, format: p.adapter.id, rows: p.result.rowCount, added, parts: p.parts, from: range?.from, to: range?.to };
+          const saved: CsvSource = { ...source, linkedSourceId: set.link || undefined, imports: [...source.imports, imp] };
+          await db.transaction("rw", db.sources, db.ledger, async () => {
+            await db.ledger.bulkPut(entries);
+            await db.sources.put(saved);
+          });
+          source = saved;
+          messages.push(`${p.fileName}: 새 기록 ${added}건${entries.length - added ? ` (이미 있던 ${entries.length - added}건은 건너뜀)` : ""}`);
+        }
       }
-      // 실제 계정 ID로 다시 변환해 결정적 ID를 확정한다
-      const { entries } = adapter.convert(preview.table, source.id);
-      const existing = await db.ledger.bulkGet(entries.map((e) => e.id));
-      const added = existing.filter((x) => !x).length;
-      await db.transaction("rw", db.sources, db.ledger, async () => {
-        await db.ledger.bulkPut(entries);
-        await db.sources.put({
-          ...source,
-          linkedSourceId: link || undefined,
-          imports: [...source.imports, { at: Date.now(), fileName: preview.fileName, format: adapter.id, rows: preview.result.rowCount, added }],
-        });
-      });
-      setDone(`${entries.length}건 중 새 거래 ${added}건을 가져왔습니다${entries.length - added ? ` (이미 있던 ${entries.length - added}건은 건너뜀)` : ""}.`);
-      setPreview(null);
+      setDone(messages);
+      setPreviews([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
-  const r = preview?.result;
-  const fmt = (t: number) => new Date(t).toLocaleDateString("ko-KR");
+  const exchanges = [...new Set(previews.map((p) => p.adapter.exchange))];
+  const kitSources = (csvSources ?? []).filter((s) => KITS[s.exchange]);
 
   return (
     <div className={card}>
       <h3 className="font-semibold">거래내역 파일 가져오기</h3>
       <p className="text-xs leading-5 text-stone-500">
-        API 키 없이 거래소에서 내려받은 거래내역 파일(CSV·엑셀)로 연결합니다. 파일은 이 브라우저 안에서만 읽고 서버로 보내지
-        않습니다. 지원: {ADAPTERS.map((a) => a.exchangeName).join(", ")} · 준비 중: {PLANNED_EXCHANGES.join(", ")}
+        API 키 없이 거래소에서 내려받은 거래내역 파일(CSV·엑셀)로 연결합니다. <b>여러 파일을 한 번에</b> 올릴 수 있고, 어느 거래소의 어떤 파일인지 자동으로
+        알아봅니다. 파일은 이 브라우저 안에서만 읽고 서버로 보내지 않습니다. 지원: {[...new Set(ADAPTERS.map((a) => a.exchangeName))].join(", ")} · 준비 중:{" "}
+        {PLANNED_EXCHANGES.join(", ")}
       </p>
-      <input type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm" />
+
+      {kitSources.length > 0 && (
+        <div className="space-y-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/40">
+          <p className="text-xs font-semibold text-stone-500">거래소별 필요한 파일</p>
+          {kitSources.map((s) => (
+            <div key={s.id} className="space-y-1.5">
+              <p className="text-sm font-medium">{s.label}</p>
+              <KitChecklist rows={kitStatus(s, allSources ?? []) ?? []} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          void onFiles(e.dataTransfer.files);
+        }}
+        className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed px-4 py-8 text-center text-sm transition-colors ${
+          dragging ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40" : "border-stone-300 hover:border-indigo-400 dark:border-stone-700"
+        }`}
+      >
+        <span className="font-medium">{busy ? "읽는 중…" : "파일을 여기에 끌어다 놓거나 눌러서 고르세요"}</span>
+        <span className="text-xs text-stone-500">여러 개 선택 가능 · CSV, 엑셀(.xlsx) · 예: OKX 거래·입금·출금 내역 3개를 한 번에</span>
+        <input
+          type="file"
+          multiple
+          accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={(e) => {
+            void onFiles(e.target.files);
+            e.target.value = "";
+          }}
+          className="sr-only"
+        />
+      </label>
 
       <details className="text-sm">
         <summary className="cursor-pointer font-medium">붙여넣기로 가져오기 (업비트 거래내역 화면, 엑셀에서 복사한 표)</summary>
@@ -572,41 +684,64 @@ function CsvImportCard() {
         </div>
       </details>
 
-      {preview && r && (
-        <div className="space-y-2 rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-900">
-          <p>
-            <b>{preview.adapter.exchangeName}</b> · {preview.adapter.formatName}
-            {!preview.adapter.verified && (
-              <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-xs text-amber-900">샘플 검증 전 형식</span>
-            )}
-          </p>
-          <p className="text-xs text-stone-600 dark:text-stone-400">
-            {r.rowCount}줄 → 원장 {r.entries.length}건{r.range ? ` · ${fmt(r.range.from)} ~ ${fmt(r.range.to)}` : ""}
-          </p>
-          {r.unknownTypes.length > 0 && (
-            <p className="text-xs text-amber-700 dark:text-amber-400">
-              처음 보는 유형 {r.unknownTypes.length}개는 &lsquo;검토 필요&rsquo;로 들어갑니다: {r.unknownTypes.join(", ")}
+      {exchanges.map((x) => {
+        const files = previews.filter((p) => p.adapter.exchange === x);
+        const set = settings[x];
+        if (!set) return null;
+        const update = (patch: Partial<GroupSetting>) => setSettings({ ...settings, [x]: { ...set, ...patch } });
+        const apiSources = (allSources ?? []).filter((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === x);
+        const base: CsvSource = (csvSources ?? []).find((s) => s.id === set.target) ?? { id: "", kind: "csv", label: "", exchange: x, imports: [], createdAt: 0 };
+        const kit = kitStatus({ ...base, linkedSourceId: set.link || undefined }, allSources ?? []);
+        return (
+          <div key={x} className="space-y-3 rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
+            <p className="font-semibold">
+              {files[0].adapter.exchangeName} · 파일 {files.length}개
             </p>
-          )}
-          {r.warnings.map((w, i) => (
-            <p key={i} className="text-xs text-amber-700 dark:text-amber-400">{w}</p>
-          ))}
-          <div className="flex flex-wrap items-center gap-2">
-            <select className={`${input} w-auto`} value={target} onChange={(e) => setTarget(e.target.value)}>
-              <option value="new">새 계정으로</option>
-              {(csvSources ?? [])
-                .filter((s) => s.exchange === preview.adapter.exchange)
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}에 합치기
-                  </option>
-                ))}
-            </select>
-            {target === "new" && <input className={`${input} w-48`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="계정 이름" />}
+            {kit && <KitChecklist rows={kit} pending={files.flatMap((f) => f.parts)} />}
+            <ul className="space-y-2">
+              {files.map((p) => {
+                const r = p.result;
+                return (
+                  <li key={p.fileName} className="space-y-1 rounded-lg bg-stone-50 p-3 dark:bg-stone-800/40">
+                    <p className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{p.fileName}</span>
+                      <Badge tone="info">{p.adapter.formatName}</Badge>
+                      {!p.adapter.verified && <Badge tone="warn">샘플 검증 전 형식</Badge>}
+                    </p>
+                    <p className="text-xs text-stone-600 dark:text-stone-400">
+                      {r.rowCount}줄 → 원장 {r.entries.length}건{r.range ? ` · ${fmtDay(r.range.from)} ~ ${fmtDay(r.range.to)}` : ""}
+                    </p>
+                    {r.unknownTypes.length > 0 && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        처음 보는 유형 {r.unknownTypes.length}개는 &lsquo;검토 필요&rsquo;로 들어갑니다: {r.unknownTypes.join(", ")}
+                      </p>
+                    )}
+                    {r.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-700 dark:text-amber-400">
+                        {w}
+                      </p>
+                    ))}
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="flex flex-wrap items-center gap-2">
+              <select className={`${input} w-auto`} value={set.target} onChange={(e) => update({ target: e.target.value })}>
+                <option value="new">새 계정으로</option>
+                {(csvSources ?? [])
+                  .filter((s) => s.exchange === x)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}에 합치기
+                    </option>
+                  ))}
+              </select>
+              {set.target === "new" && <input className={`${input} w-48`} value={set.label} onChange={(e) => update({ label: e.target.value })} placeholder="계정 이름" />}
+            </div>
             {apiSources.length > 0 && (
-              <label className="flex w-full flex-wrap items-center gap-2 text-xs">
+              <label className="flex flex-wrap items-center gap-2 text-xs">
                 같은 계정의 API 연결
-                <select className={`${input} w-auto`} value={link} onChange={(e) => setLink(e.target.value)}>
+                <select className={`${input} w-auto`} value={set.link} onChange={(e) => update({ link: e.target.value })}>
                   {apiSources.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.label}
@@ -614,26 +749,35 @@ function CsvImportCard() {
                   ))}
                   <option value="">없음 (다른 계정)</option>
                 </select>
-                <span className="text-stone-500">같은 계정이면 CSV 기간은 CSV를, 그 밖의 기간은 API 내역을 써서 중복을 막습니다.</span>
+                <span className="text-stone-500">같은 계정이면 파일에 있는 기간·종류는 파일을, 나머지는 API 내역을 써서 중복을 막습니다.</span>
               </label>
             )}
-            <button className={button} onClick={onImport}>
-              가져오기
-            </button>
           </div>
-        </div>
+        );
+      })}
+
+      {previews.length > 0 && (
+        <button className={button} disabled={busy} onClick={onImport}>
+          {busy ? "가져오는 중…" : previews.length > 1 ? `파일 ${previews.length}개 모두 가져오기` : "가져오기"}
+        </button>
       )}
 
-      {unknownHeaders && (
-        <div className="space-y-1 rounded-lg bg-red-50 p-3 text-xs dark:bg-red-950/40">
-          <p className="font-medium">지원하지 않는 형식입니다.</p>
-          <p className="break-all text-stone-600 dark:text-stone-400">열 이름: {unknownHeaders.join(", ") || "(읽지 못함)"}</p>
-          <p className="text-stone-600 dark:text-stone-400">열을 직접 연결하는 화면은 준비 중입니다.</p>
+      {failed.map((f) => (
+        <div key={f.fileName} className="space-y-1 rounded-lg bg-red-50 p-3 text-xs dark:bg-red-950/40">
+          <p className="font-medium">
+            {f.fileName}: {f.message}
+          </p>
+          {f.headers && <p className="break-all text-stone-600 dark:text-stone-400">열 이름: {f.headers.join(", ") || "(읽지 못함)"}</p>}
         </div>
+      ))}
+      {done.length > 0 && (
+        <ul className="space-y-0.5 text-sm text-emerald-700 dark:text-emerald-400">
+          {done.map((m) => (
+            <li key={m}>✓ {m}</li>
+          ))}
+        </ul>
       )}
-      {done && <p className="text-sm text-emerald-700 dark:text-emerald-400">{done}</p>}
       {error && <p className="text-sm text-red-600">{error}</p>}
-      {preview && <p className="text-xs text-stone-500">파일 받는 법: {preview.adapter.howToExport}</p>}
     </div>
   );
 }
@@ -1050,7 +1194,7 @@ function ConnectedList({ sources }: { sources: Source[] }) {
               {items.map((s) => (
                 <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 text-sm">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                    {kindName(s).slice(0, 2)}
+                    {(s.kind === "csv" ? s.label : kindName(s)).slice(0, 2)}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="flex flex-wrap items-center gap-2 font-medium">
@@ -1060,6 +1204,11 @@ function ConnectedList({ sources }: { sources: Source[] }) {
                     <p className="truncate font-mono text-xs text-stone-500">{sourceDetail(s)}</p>
                   </div>
                   {s.kind === "csv" && <CsvLink source={s} all={sources} />}
+                  {s.kind === "csv" && KITS[s.exchange] && (
+                    <div className="order-last basis-full pl-12">
+                      <KitChecklist rows={kitStatus(s, sources) ?? []} />
+                    </div>
+                  )}
                   {s.kind === "btc" && <ForgetXpub source={s} />}
                   {confirmId === s.id ? (
                     <span className="flex items-center gap-2 text-xs">

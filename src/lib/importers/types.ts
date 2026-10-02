@@ -25,5 +25,7 @@ export interface CsvAdapter {
   howToExport: string; // 파일 받는 방법 안내
   verified: boolean; // 실제 샘플 파일로 검증했는지
   detect(headers: string[]): boolean;
+  // 이 파일이 거래소 준비 목록(lib/importers/kits.ts)의 어느 부분인지. 없으면 "<거래소>:all" (파일 하나로 충분한 거래소)
+  parts?(table: CsvTable): string[];
   convert(table: CsvTable, sourceId: string): ImportResult;
 }

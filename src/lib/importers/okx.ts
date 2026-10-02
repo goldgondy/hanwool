@@ -1,7 +1,7 @@
 import Decimal from "@/lib/decimal";
 import type { LedgerEntry } from "@/lib/db";
 import { rowKey } from "./csv";
-import type { CsvAdapter, ImportResult } from "./types";
+import type { CsvAdapter, CsvTable, ImportResult } from "./types";
 
 // OKX 계정 내역 파일 (OKX → 자산 → 주문 센터/거래 내역 → 내역 다운로드, CSV).
 // 첫 줄: "UID:… · Account Type:… · Time Zone:UTC+8", 둘째 줄이 열 이름이다.
@@ -58,6 +58,8 @@ export const okxHistory: CsvAdapter = {
   verified: false,
 
   detect: (h) => ["Time", "Trade Type", "Action", "Balance Change", "Balance Unit"].every((c) => h.includes(c)),
+  // 자금 계정 내역 파일에는 입금·출금이 함께 있다고 본다 (형식 추정)
+  parts: (t) => (/funding/i.test((t.preamble ?? []).join(" ")) ? ["okx:deposit", "okx:withdrawal"] : ["okx:trading"]),
 
   convert(table, sourceId): ImportResult {
     const entries: LedgerEntry[] = [];
@@ -147,7 +149,7 @@ export const okxHistory: CsvAdapter = {
     if (bad) warnings.push(`${bad}줄은 시각·종류·잔고 변동을 읽지 못해 건너뛰었습니다.`);
     if (internal) {
       warnings.push(
-        `자금 계정 ↔ 거래 계정 이동 ${internal}건은 같은 OKX 안의 이동이라 뺐습니다. 외부 입금·출금은 자금 계정(Funding) 내역에 있으니, 그 파일도 올리거나 OKX API를 연결해 ‘같은 계정’으로 묶으세요.`,
+        `자금 계정 ↔ 거래 계정 이동 ${internal}건은 같은 OKX 안의 이동이라 뺐습니다 (외부 입금·출금은 입금·출금 내역 파일에 있습니다).`,
       );
     }
     if (derivatives) warnings.push(`선물·파생상품 기록 ${derivatives}건은 과세 여부 검토가 필요해 미분류로 두고 세금 계산에서 제외했습니다.`);
@@ -164,6 +166,7 @@ export const okxHistory: CsvAdapter = {
 // 시각: 파일에 시간대가 적혀 있지 않으면 계정 내역 파일과 같은 OKX 기본값(UTC+8)으로 본다.
 
 const header = (headers: string[], re: RegExp) => headers.find((h) => re.test(h));
+const isWithdrawalFile = (t: CsvTable) => !!header(t.headers, /withdraw/i) || (!header(t.headers, /deposit/i) && /withdraw/i.test((t.preamble ?? []).join(" ")));
 const DONE = /sent|complete|success|succeeded|credited|arrived|confirmed|finished|done/i;
 
 // "05/11/2026 21:37:10" (월/일/연) 또는 "2026-05-11 21:37:10" → 밀리초
@@ -185,6 +188,7 @@ export const okxTransfers: CsvAdapter = {
   verified: false,
 
   detect: (h) => ["Time", "Crypto", "Network", "Amount", "Status"].every((c) => h.includes(c)),
+  parts: (t) => [isWithdrawalFile(t) ? "okx:withdrawal" : "okx:deposit"],
 
   convert(table, sourceId): ImportResult {
     const entries: LedgerEntry[] = [];
@@ -196,7 +200,7 @@ export const okxTransfers: CsvAdapter = {
     const skipped = new Map<string, number>();
 
     const h = table.headers;
-    const out = !!header(h, /withdraw/i) || (!header(h, /deposit/i) && /withdraw/i.test((table.preamble ?? []).join(" ")));
+    const out = isWithdrawalFile(table);
     const addrCol = header(h, /address|^to$|^from$/i);
     const txCol = header(h, /transaction|tx\s*id|txid|hash/i);
     const offset = okxOffsetMinutes(table.preamble);
@@ -237,11 +241,6 @@ export const okxTransfers: CsvAdapter = {
 
     if (bad) warnings.push(`${bad}줄은 시각·코인·수량을 읽지 못해 건너뛰었습니다.`);
     if (skipped.size) warnings.push(`완료되지 않은 기록은 뺐습니다: ${[...skipped].map(([s, n]) => `${s} ${n}건`).join(", ")}.`);
-    warnings.push(
-      out
-        ? "출금 내역입니다. 입금 내역 파일도 함께 올려야 OKX로 들어온 코인의 출처가 이어집니다."
-        : "입금 내역입니다. 출금 내역 파일도 함께 올리세요.",
-    );
     return { entries, warnings, unknownTypes: [], range: entries.length ? { from, to } : null, rowCount: table.rows.length };
   },
 };

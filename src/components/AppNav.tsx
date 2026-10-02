@@ -7,6 +7,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
 import { isVaultInitialized, lockVault } from "@/lib/vault";
 import { reconcileStatus } from "@/lib/readiness";
+import { missingFiles } from "@/lib/importers/kits";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
 
 // 왼쪽 메뉴: 신고 준비 단계(1~4)와 도구. 휴대폰에서는 위쪽 막대의 메뉴 버튼으로 연다.
@@ -97,10 +98,10 @@ function VaultStatus() {
 
 function NavBody({ onNavigate }: { onNavigate: () => void }) {
   const pathname = usePathname();
-  const sourceCount = useLiveQuery(() => db.sources.count(), []);
+  const sources = useLiveQuery(() => db.sources.toArray(), []);
   const recon = useLiveQuery(() => reconcileStatus(), []);
   const done: Record<string, boolean> = {
-    "/sources": (sourceCount ?? 0) > 0,
+    "/sources": (sources?.length ?? 0) > 0 && missingFiles(sources ?? []).length === 0,
     "/reconcile": !!recon?.ran && recon.open === 0,
   };
   const badge: Record<string, number | undefined> = { "/reconcile": recon?.open || undefined };
