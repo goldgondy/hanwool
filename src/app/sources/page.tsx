@@ -18,12 +18,12 @@ import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
 import { encrypt } from "@/lib/vault";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
+import { Badge, btn, Card, Empty, inputCls, PageHeader, Pill } from "@/components/ui";
 
-const input =
-  "w-full rounded-lg border border-stone-300 bg-transparent px-3 py-2 text-sm dark:border-stone-700";const button =
-  "rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900";
-const card =
-  "space-y-3 rounded-xl border border-stone-200 p-5 dark:border-stone-800";
+const input = inputCls;
+const button = btn();
+// 입력 양식은 "계정 추가" 카드 안에 들어가므로 테두리 없이 간격만 둔다
+const card = "space-y-3";
 
 function mask(s: string) {
   return s.length <= 8 ? "****" : `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -247,9 +247,9 @@ function TronForm() {
   );
 }
 
-function XapiForm() {
+function XapiForm({ preset }: { preset: ApiExchange }) {
   const unlocked = useVaultUnlocked();
-  const [exchange, setExchange] = useState<ApiExchange>("bybit");
+  const exchange = preset;
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
@@ -280,14 +280,7 @@ function XapiForm() {
 
   return (
     <form onSubmit={onSubmit} className={card}>
-      <h3 className="font-semibold">그 밖의 거래소 API 키</h3>
-      <select className={input} value={exchange} onChange={(e) => setExchange(e.target.value as ApiExchange)}>
-        {(Object.keys(API_EXCHANGES) as ApiExchange[]).map((x) => (
-          <option key={x} value={x}>
-            {API_EXCHANGES[x].name}
-          </option>
-        ))}
-      </select>
+      <h3 className="font-semibold">{info.name} API 키</h3>
       <p className="text-xs leading-5 text-stone-500">
         {info.keyHelp}. Secret은 암호화되어 이 브라우저에만 저장되고, 요청 서명도 브라우저에서 합니다.{" "}
         <span className="text-amber-700 dark:text-amber-400">실제 키로 검증 전인 연결입니다.</span>
@@ -998,69 +991,207 @@ async function removeSource(id: string) {
   });
 }
 
+function sourceDetail(s: Source) {
+  if (s.kind === "evm") return `${s.address.slice(0, 6)}…${s.address.slice(-4)} · ${s.chains.map((c) => EVM_CHAINS[c].name).join(", ")}`;
+  if (s.kind === "btc") return `${s.frozenAddresses?.length ? `주소 ${s.frozenAddresses.length}개 (xpub 지움)` : mask(s.input)} · ${new URL(s.esploraUrl).host}`;
+  if (s.kind === "csv") return `파일 ${s.imports.length}개 가져옴`;
+  if (s.kind === "xapi") return `API 키 ${mask(s.apiKey)}`;
+  if (s.kind === "tron" || s.kind === "solana") return `${s.address.slice(0, 6)}…${s.address.slice(-4)}`;
+  if (s.kind === "manual") return "‘직접 입력’ 탭에서 관리";
+  return `API 키 ${mask(s.apiKey)}`;
+}
+
+// 계정 종류 이름 (거래소 API는 거래소 이름으로)
+function kindName(s: Source) {
+  if (s.kind === "xapi") return API_EXCHANGES[s.exchange].name;
+  return KIND_LABEL[s.kind];
+}
+
+const GROUPS: { title: string; kinds: Source["kind"][] }[] = [
+  { title: "거래소", kinds: ["binance", "okx", "xapi", "csv"] },
+  { title: "개인 지갑", kinds: ["btc", "evm", "tron", "solana"] },
+  { title: "직접 입력", kinds: ["manual"] },
+];
+
+function ConnectedList({ sources }: { sources: Source[] }) {
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  return (
+    <div className="space-y-5">
+      {GROUPS.map((g) => {
+        const items = sources.filter((s) => g.kinds.includes(s.kind));
+        if (!items.length) return null;
+        return (
+          <div key={g.title} className="space-y-2">
+            <p className="text-xs font-semibold text-stone-400">
+              {g.title} {items.length}
+            </p>
+            <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200 dark:divide-stone-800 dark:border-stone-800">
+              {items.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 text-sm">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                    {kindName(s).slice(0, 2)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-2 font-medium">
+                      {s.label}
+                      <Badge>{kindName(s)}</Badge>
+                    </p>
+                    <p className="truncate font-mono text-xs text-stone-500">{sourceDetail(s)}</p>
+                  </div>
+                  {s.kind === "csv" && <CsvLink source={s} all={sources} />}
+                  {s.kind === "btc" && <ForgetXpub source={s} />}
+                  {confirmId === s.id ? (
+                    <span className="flex items-center gap-2 text-xs">
+                      거래 기록도 함께 지워집니다.
+                      <button onClick={() => removeSource(s.id)} className={btn("danger", "sm")}>
+                        삭제
+                      </button>
+                      <button onClick={() => setConfirmId(null)} className={btn("ghost", "sm")}>
+                        취소
+                      </button>
+                    </span>
+                  ) : (
+                    <button onClick={() => setConfirmId(s.id)} className={btn("ghost", "sm")}>
+                      삭제
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type Tab = "exchange" | "wallet" | "file" | "manual";
+const TABS: { key: Tab; label: string; hint: string }[] = [
+  { key: "exchange", label: "거래소 API", hint: "읽기 전용 키로 자동으로 가져오기" },
+  { key: "wallet", label: "개인 지갑", hint: "지갑 주소로 블록체인 기록 조회" },
+  { key: "file", label: "파일·붙여넣기", hint: "거래소에서 받은 거래내역" },
+  { key: "manual", label: "직접 입력", hint: "연결할 수 없는 거래, 2026년 말 보유분" },
+];
+
+type ExchangeChoice = "binance" | "okx" | ApiExchange;
+const EXCHANGE_ORDER: ExchangeChoice[] = ["upbit", "bithumb", "binance", "okx", "bybit", "coinbase", "bitget", "gate", "mexc"];
+const exchangeName = (x: ExchangeChoice) => (x === "binance" ? "바이낸스" : x === "okx" ? "OKX" : API_EXCHANGES[x].name);
+
+type WalletChoice = "btc" | "evm" | "tron" | "solana";
+const WALLETS: { key: WalletChoice; name: string; hint: string }[] = [
+  { key: "evm", name: "이더리움 계열", hint: "메타마스크·라비 등, 이더리움·아비트럼·베이스·옵티미즘·폴리곤" },
+  { key: "btc", name: "비트코인", hint: "zpub·xpub 또는 주소" },
+  { key: "tron", name: "트론", hint: "TRC-20 USDT" },
+  { key: "solana", name: "솔라나", hint: "팬텀·솔플레어" },
+];
+
+function Tile({ active, onClick, title, hint }: { active: boolean; onClick: () => void; title: string; hint?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+        active
+          ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-500/20 dark:border-indigo-500 dark:bg-indigo-950/40"
+          : "border-stone-200 bg-white hover:border-stone-300 dark:border-stone-800 dark:bg-stone-900 dark:hover:border-stone-700"
+      }`}
+    >
+      <p className="text-sm font-semibold">{title}</p>
+      {hint && <p className="mt-0.5 text-xs text-stone-500">{hint}</p>}
+    </button>
+  );
+}
+
+function AddAccount() {
+  const [tab, setTab] = useState<Tab>("exchange");
+  const [exchange, setExchange] = useState<ExchangeChoice>("upbit");
+  const [wallet, setWallet] = useState<WalletChoice>("evm");
+
+  return (
+    <Card className="space-y-5">
+      <div className="space-y-1">
+        <h2 className="font-semibold">계정 추가</h2>
+        <p className="text-xs text-stone-500">{TABS.find((t) => t.key === tab)?.hint}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {TABS.map((t) => (
+          <Pill key={t.key} active={tab === t.key} onClick={() => setTab(t.key)}>
+            {t.label}
+          </Pill>
+        ))}
+      </div>
+
+      {tab === "exchange" && (
+        <div className="space-y-5">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+            {EXCHANGE_ORDER.map((x) => (
+              <button
+                key={x}
+                type="button"
+                onClick={() => setExchange(x)}
+                className={`rounded-xl border px-2 py-3 text-sm font-medium transition-colors ${
+                  exchange === x
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-800 ring-2 ring-indigo-500/20 dark:bg-indigo-950/40 dark:text-indigo-200"
+                    : "border-stone-200 bg-white hover:border-stone-300 dark:border-stone-800 dark:bg-stone-900"
+                }`}
+              >
+                {exchangeName(x)}
+              </button>
+            ))}
+          </div>
+          <VaultPanel />
+          <div className="max-w-xl">
+            {exchange === "binance" ? <BinanceForm /> : exchange === "okx" ? <OkxForm /> : <XapiForm key={exchange} preset={exchange} />}
+          </div>
+          <p className="text-xs text-stone-500">API 키를 만들기 어렵다면 ‘파일·붙여넣기’ 탭에서 거래내역 파일로도 연결할 수 있습니다.</p>
+        </div>
+      )}
+
+      {tab === "wallet" && (
+        <div className="space-y-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {WALLETS.map((w) => (
+              <Tile key={w.key} active={wallet === w.key} onClick={() => setWallet(w.key)} title={w.name} hint={w.hint} />
+            ))}
+          </div>
+          <div className="max-w-xl">
+            {wallet === "evm" ? <EvmForm /> : wallet === "btc" ? <BtcForm /> : wallet === "tron" ? <TronForm /> : <SolanaForm />}
+          </div>
+        </div>
+      )}
+
+      {tab === "file" && (
+        <div className="max-w-2xl">
+          <CsvImportCard />
+        </div>
+      )}
+
+      {tab === "manual" && (
+        <div className="max-w-2xl">
+          <ManualEntryCard />
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function SourcesPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
 
   return (
-    <div className="space-y-8">
-      <VaultPanel />
+    <div className="space-y-6">
+      <PageHeader
+        step={1}
+        title="계정 연결"
+        description="사용하는 거래소와 지갑을 모두 연결하세요. 빠진 계정이 있으면 취득가가 끊겨 세금이 실제보다 많이 계산될 수 있습니다. 키와 주소는 이 브라우저에만 저장됩니다."
+      />
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">연결된 계정</h2>
-        {sources?.length === 0 && (
-          <p className="text-sm text-stone-500">아직 연결된 계정이 없습니다.</p>
-        )}
-        <ul className="space-y-2">
-          {sources?.map((s) => (
-            <li
-              key={s.id}
-              className="flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 px-4 py-3 text-sm dark:border-stone-800"
-            >
-              <span className="rounded bg-stone-200 px-2 py-0.5 text-xs dark:bg-stone-800">
-                {KIND_LABEL[s.kind]}
-              </span>
-              <span className="font-medium">{s.label}</span>
-              <code className="text-xs text-stone-500">
-                {s.kind === "evm"
-                  ? `${s.address.slice(0, 6)}…${s.address.slice(-4)} · ${s.chains
-                      .map((c) => EVM_CHAINS[c].name)
-                      .join(", ")}`
-                  : s.kind === "btc"
-                    ? `${s.frozenAddresses?.length ? `주소 ${s.frozenAddresses.length}개 (xpub 지움)` : mask(s.input)} · ${new URL(s.esploraUrl).host}`
-                    : s.kind === "csv"
-                      ? `파일 ${s.imports.length}개 가져옴`
-                      : s.kind === "xapi"
-                        ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
-                        : s.kind === "tron" || s.kind === "solana"
-                          ? `${s.address.slice(0, 6)}…${s.address.slice(-4)}`
-                          : s.kind === "manual"
-                            ? "아래 직접 입력 칸에서 관리"
-                            : mask(s.apiKey)}
-              </code>
-              {s.kind === "csv" && <CsvLink source={s} all={sources ?? []} />}
-              {s.kind === "btc" && <ForgetXpub source={s} />}
-              <button
-                onClick={() => removeSource(s.id)}
-                className="ml-auto text-xs text-red-600 hover:underline"
-              >
-                삭제
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <Card className="space-y-4">
+        <h2 className="font-semibold">연결된 계정{sources?.length ? ` ${sources.length}개` : ""}</h2>
+        {sources?.length === 0 ? <Empty>아직 연결된 계정이 없습니다. 아래에서 추가하세요.</Empty> : sources && <ConnectedList sources={sources} />}
+      </Card>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <BtcForm />
-        <EvmForm />
-        <TronForm />
-        <SolanaForm />
-        <CsvImportCard />
-        <ManualEntryCard />
-        <BinanceForm />
-        <OkxForm />
-        <XapiForm />
-      </div>
+      <AddAccount />
     </div>
   );
 }

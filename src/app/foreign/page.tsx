@@ -9,8 +9,7 @@ import { formatDateTime, formatKrw } from "@/lib/format";
 import { applyCsvCoverage } from "@/lib/ledger/dedup";
 import { priceKey } from "@/lib/tax/build-events";
 import { fetchPrices } from "@/lib/tax/calculate";
-
-const button = "rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900";
+import { btn, Callout, Card, Empty, ErrorText, inputCls, PageHeader, Progress } from "@/components/ui";
 
 interface Result {
   year: number;
@@ -93,45 +92,47 @@ export default function ForeignPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold">해외금융계좌 신고 확인</h2>
-        <p className="text-sm text-stone-500">
-          해외 거래소(바이낸스·OKX 등)에 둔 자산의 합계가 그해 <b>어느 달이든 말일에 5억원을 넘으면</b> 다음 해 6월에 해외금융계좌를 신고해야 합니다.
-          연결한 해외 거래소 계정의 월말 잔고를 원화로 추정해 대상인지 알려 드립니다. 은행·증권 등 다른 해외계좌는 포함하지 않으니 함께 더해 판단하세요.
-        </p>
-      </div>
+      <PageHeader
+        title="해외금융계좌 신고 확인"
+        description={
+          <>
+            해외 거래소(바이낸스·OKX 등)에 둔 자산의 합계가 그해 <b>어느 달이든 말일에 5억원을 넘으면</b> 다음 해 6월에 해외금융계좌를 신고해야 합니다.
+            연결한 해외 거래소 계정의 월말 잔고를 원화로 추정해 대상인지 알려 드립니다. 은행·증권 등 다른 해외계좌는 포함하지 않으니 함께 더해 판단하세요.
+          </>
+        }
+      />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <select className="rounded-lg border border-stone-300 bg-transparent px-3 py-2 text-sm dark:border-stone-700" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+      <Card className="flex flex-wrap items-center gap-3">
+        <select className={`${inputCls} w-auto`} value={year} onChange={(e) => setYear(Number(e.target.value))}>
           {[thisYear, thisYear - 1, thisYear - 2].map((y) => (
             <option key={y} value={y}>
               {y}년 ({y + 1}년 6월 신고분)
             </option>
           ))}
         </select>
-        <button className={button} disabled={busy} onClick={run}>
+        <button className={btn()} disabled={busy} onClick={run}>
           {busy ? "계산 중…" : "확인하기"}
         </button>
-        <span className="text-sm text-stone-500">{progress}</span>
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+        <Progress text={progress} />
+      </Card>
+      <ErrorText>{error}</ErrorText>
 
       {result && (
         <>
-          {result.accounts.length === 0 && <p className="text-sm text-stone-500">연결한 해외 거래소 계정이 없습니다.</p>}
+          {result.accounts.length === 0 && <Empty>연결한 해외 거래소 계정이 없습니다.</Empty>}
           {missing.length > 0 && (
-            <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            <Callout tone="warn">
               {missing.map((a) => a.label).join(", ")}은(는) 아직 잔고 대사 결과가 없어 계산하지 못했습니다.{" "}
               <Link href="/reconcile" className="underline">
                 잔고 대사
               </Link>
               를 먼저 실행하세요 (실제 잔고를 기준으로 과거 월말 잔고를 거꾸로 구합니다).
-            </p>
+            </Callout>
           )}
 
           {peak && (
             <section
-              className={`rounded-xl border p-4 text-sm ${over ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/40" : "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40"}`}
+              className={`rounded-2xl border p-5 text-sm ${over ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/40" : "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40"}`}
             >
               <p className="font-semibold">
                 {result.year}년 월말 잔고 최대 {formatKrw(peak.total.toFixed(0))} ({new Date(peak.end).toISOString().slice(0, 7)} 말) →{" "}
@@ -145,7 +146,7 @@ export default function ForeignPage() {
           )}
 
           {result.accounts.length > 0 && (
-            <div className="overflow-x-auto">
+            <Card className="overflow-x-auto">
               <table className="w-full text-sm tabular-nums">
                 <thead className="text-left text-xs text-stone-500">
                   <tr className="border-b border-stone-200 dark:border-stone-800">
@@ -160,7 +161,7 @@ export default function ForeignPage() {
                 </thead>
                 <tbody>
                   {result.months.map((m) => (
-                    <tr key={m.end} className="border-b border-stone-100 dark:border-stone-900">
+                    <tr key={m.end} className="border-b border-stone-100 last:border-0 dark:border-stone-800/60">
                       <td className="py-1.5 pr-3">{new Date(m.end).toISOString().slice(0, 7)}</td>
                       {m.perAccount.map((v, i) => (
                         <td key={i} className="py-1.5 pr-3 text-right">
@@ -179,7 +180,7 @@ export default function ForeignPage() {
                   .map((a) => `${a.label} ${formatDateTime(a.anchor!.at)}`)
                   .join(", ")}
               </p>
-            </div>
+            </Card>
           )}
 
           {result.warnings.length > 0 && (

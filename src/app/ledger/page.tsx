@@ -18,6 +18,7 @@ import { syncEvmHistory } from "@/lib/ledger/evm-sync";
 import { reconcile, type ReconcileRow } from "@/lib/ledger/reconcile";
 import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
+import { btn, Callout, Card, Empty, ErrorText, PageHeader, Pill, Progress, trCls } from "@/components/ui";
 
 type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource | OkxSource | BinanceSource;
 type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource | OkxSource | BinanceSource;
@@ -90,8 +91,7 @@ const KIND_LABEL: Record<LedgerEntry["kind"], string> = {
   other: "기타",
 };
 
-const button =
-  "rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900";
+const button = btn();
 
 function short(addr?: string) {
   return addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : "-";
@@ -120,12 +120,12 @@ function ReconcileTable({
 }) {
   const mismatches = rows.filter((r) => !r.diff.isZero()).length;
   return (
-    <section className="space-y-2">
+    <Card as="section" className="space-y-2">
       {mismatches > 0 && !synced && (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+        <Callout tone="warn">
           마지막 동기화 이후에 새 거래가 생겼다면 그만큼 차이가 납니다. 먼저 <b>내역 동기화</b>로 최신 거래를 가져온 뒤 다시
           확인하세요.
-        </p>
+        </Callout>
       )}
       <h3 className="font-semibold">
         수량 대사{" "}
@@ -174,7 +174,7 @@ function ReconcileTable({
           </tbody>
         </table>
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -250,19 +250,15 @@ function SourceLedger({ source }: { source: LedgerSource }) {
               {API_EXCHANGES[source.exchange].name} 거래 내역 API는 준비 중입니다. 잔고 조회만 가능합니다.
             </span>
           )}
-          <button
-            className="rounded-lg border border-stone-300 px-4 py-2 text-sm disabled:opacity-40 dark:border-stone-700"
-            disabled={busy}
-            onClick={() => run(false)}
-          >
+          <button className={btn("secondary")} disabled={busy} onClick={() => run(false)}>
             잔고 대조만
           </button>
           <span className="text-sm text-stone-500">
-            {progress || (lastSync ? `마지막 동기화 ${formatDateTime(lastSync)}` : lastSync === null ? "아직 동기화하지 않았습니다" : "")}
+            {progress ? <Progress text={progress} /> : (lastSync ? `마지막 동기화 ${formatDateTime(lastSync)}` : lastSync === null ? "아직 동기화하지 않았습니다" : "")}
           </span>
         </div>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <ErrorText>{error}</ErrorText>
 
       {results && (
         <ul className="space-y-1 text-sm">
@@ -282,7 +278,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 
       {rows && <ReconcileTable rows={rows} selected={selected} onSelect={setSelected} synced={synced} />}
 
-      <section className="space-y-2">
+      <Card as="section" className="space-y-2">
         <h3 className="font-semibold">
           원장 {entries ? `(${entries.length}건${selected ? ", 필터 적용" : ""})` : ""}
         </h3>
@@ -304,7 +300,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
               </thead>
               <tbody className="tabular-nums">
                 {shown.map((e) => (
-                  <tr key={e.id} className="border-b border-stone-100 dark:border-stone-900">
+                  <tr key={e.id} className={trCls}>
                     <td className="py-1.5 pr-4 whitespace-nowrap">{formatDateTime(e.time)}</td>
                     <td className="py-1.5 pr-4">{e.location}</td>
                     <td className="py-1.5 pr-4">{KIND_LABEL[e.kind]}</td>
@@ -330,7 +326,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
             )}
           </div>
         )}
-      </section>
+      </Card>
     </div>
   );
 }
@@ -345,32 +341,22 @@ export default function LedgerPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold">원장</h2>
-        <p className="text-sm text-stone-500">
-          연결한 계정의 모든 입출금·스왑·수수료 내역입니다. 지갑(비트코인·EVM·트론·솔라나)과 거래소 API(바이낸스·OKX·바이비트·코인베이스·비트겟·게이트·MEXC),
-          거래소 CSV를 지원합니다.
-        </p>
-      </div>
+      <PageHeader
+        title="거래 원장"
+        description="계정 하나씩 모든 입출금·거래·수수료 기록을 보고, 그 계정만 따로 동기화하거나 잔고를 맞춰 볼 수 있습니다. 전체를 한 번에 하려면 2단계 ‘동기화·잔고 대사’를 쓰세요."
+      />
 
-      {sources && wallets.length === 0 && (
-        <p className="text-sm text-stone-500">연결 계정에서 지갑이나 거래소를 먼저 추가하세요.</p>
-      )}
+      {sources && wallets.length === 0 && <Empty>계정 연결에서 지갑이나 거래소를 먼저 추가하세요.</Empty>}
 
       {wallets.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {wallets.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setActiveId(s.id)}
-              className={`rounded-full border px-3 py-1 text-sm ${
-                s.id === active?.id
-                  ? "border-stone-900 bg-stone-900 text-white dark:border-stone-100 dark:bg-stone-100 dark:text-stone-900"
-                  : "border-stone-300 dark:border-stone-700"
-              }`}
-            >
-              {s.label} {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "xapi" || s.kind === "okx" || s.kind === "binance" ? "API" : "CSV"}
-            </button>
+            <Pill key={s.id} active={s.id === active?.id} onClick={() => setActiveId(s.id)}>
+              {s.label}{" "}
+              <span className="opacity-60">
+                {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "csv" ? "CSV" : "API"}
+              </span>
+            </Pill>
           ))}
         </div>
       )}

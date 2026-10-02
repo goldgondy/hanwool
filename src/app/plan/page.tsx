@@ -6,9 +6,10 @@ import { formatAmount, formatKrw } from "@/lib/format";
 import { calculate, currentPrices } from "@/lib/tax/calculate";
 import { deductionRoom, sellPlan, splitYears, unrealized, valueOf, yearEndSim, type PlanHolding } from "@/lib/tax/planner";
 import { TAX_START, yearOf } from "@/lib/tax/rules";
+import { btn, Callout, Card, ErrorText, inputCls, PageHeader, Progress, Stat } from "@/components/ui";
 
-const button = "rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900";
-const input = "rounded-lg border border-stone-300 bg-transparent px-3 py-2 text-sm dark:border-stone-700";
+const button = btn();
+const input = inputCls;
 const won = (d: Decimal) => formatKrw(d.toFixed(0));
 const tone = (d: Decimal) => (d.isNegative() ? "text-red-600" : d.isZero() ? "" : "text-emerald-600");
 
@@ -60,42 +61,32 @@ export default function PlanPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold">절세 도구</h2>
-        <p className="text-sm text-stone-500">
-          지금 보유한 코인의 평가손익과 올해 이미 확정된 손익으로, 연말에 무엇을 팔면 세금이 어떻게 달라지는지, 돈이 필요할 때 무엇부터 팔아야
-          세금이 적은지 계산합니다. 취득가는 이동평균(2026년 말 보유분은 의제취득가 반영)이고, 수수료와 시세 변동은 고려하지 않은 추정입니다.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <button className={button} disabled={busy} onClick={load}>
-          {busy ? "불러오는 중…" : data ? "다시 불러오기" : "보유 현황 불러오기"}
-        </button>
-        <span className="text-sm text-stone-500">{progress}</span>
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <PageHeader
+        title="절세 도구"
+        description="지금 보유한 코인의 평가손익과 올해 확정된 손익으로, 연말에 무엇을 팔면 세금이 어떻게 달라지는지, 돈이 필요할 때 무엇부터 팔아야 세금이 적은지 계산합니다. 취득가는 이동평균(2026년 말 보유분은 의제취득가 반영)이고, 수수료와 시세 변동은 고려하지 않은 추정입니다."
+        actions={
+          <button className={button} disabled={busy} onClick={load}>
+            {busy ? "불러오는 중…" : data ? "다시 불러오기" : "보유 현황 불러오기"}
+          </button>
+        }
+      />
+      <Progress text={progress} />
+      <ErrorText>{error}</ErrorText>
       {data?.beforeTax && (
-        <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+        <Callout tone="warn">
           과세는 2027년부터라 올해({data.year}년) 판 것은 세금이 없습니다. 아래 계산은 2027년에 같은 상황이라면 어떻게 되는지 미리 보는 용도입니다.
-        </p>
+        </Callout>
       )}
 
       {data && sim && room && (
-        <section className="space-y-3">
+        <Card as="section" className="space-y-4">
           <h3 className="font-semibold">연말 정리 시뮬레이션</h3>
-          <div className="grid gap-2 text-sm sm:grid-cols-3">
-            <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-              <p className="text-xs text-stone-500">{data.year}년 확정 손익</p>
-              <p className={`font-semibold tabular-nums ${tone(data.realizedNet)}`}>{won(data.realizedNet)}</p>
-            </div>
-            <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-              <p className="text-xs text-stone-500">남은 기본공제 (이만큼 이익 실현은 세금 0)</p>
-              <p className="font-semibold tabular-nums">{won(room)}</p>
-            </div>
-            <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+          <div className="grid gap-3 text-sm sm:grid-cols-3">
+            <Stat label={`${data.year}년 확정 손익`} value={<span className={tone(data.realizedNet)}>{won(data.realizedNet)}</span>} />
+            <Stat label="남은 기본공제" value={won(room)} hint="이만큼 이익 실현은 세금 0" tone="info" />
+            <div className="rounded-xl border border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900/60">
               <p className="text-xs text-stone-500">선택한 코인을 모두 팔면 세금</p>
-              <p className="font-semibold tabular-nums">
+              <p className="mt-1 text-lg font-bold tabular-nums">
                 {won(sim.before.tax)} → {won(sim.after.tax)}{" "}
                 <span className={`text-xs ${sim.change.isNegative() ? "text-emerald-600" : sim.change.isZero() ? "" : "text-red-600"}`}>
                   ({sim.change.isNegative() ? "" : "+"}
@@ -120,7 +111,7 @@ export default function PlanPage() {
                 {holdings.map((h) => {
                   const u = unrealized(h);
                   return (
-                    <tr key={h.asset} className="border-b border-stone-100 dark:border-stone-900">
+                    <tr key={h.asset} className="border-b border-stone-100 last:border-0 dark:border-stone-800/60">
                       <td className="py-1.5 pr-3">
                         <input
                           type="checkbox"
@@ -150,11 +141,11 @@ export default function PlanPage() {
             <li>남은 기본공제만큼은 이익 난 코인을 팔았다 다시 사도 세금이 없고, 다시 산 값이 새 취득가가 되어 나중 세금이 줄어듭니다.</li>
             <li>판 뒤 바로 다시 사는 거래의 세법상 취급은 신고 전에 세무 전문가와 확인하세요.</li>
           </ul>
-        </section>
+        </Card>
       )}
 
       {data && (
-        <section className="space-y-3">
+        <Card as="section" className="space-y-4">
           <h3 className="font-semibold">매도 플랜: 필요한 금액을 세금 적게 마련하기</h3>
           <div className="flex flex-wrap items-center gap-2">
             <input className={`${input} w-56`} value={need} onChange={(e) => setNeed(e.target.value)} placeholder="필요한 금액 (원)" inputMode="numeric" />
@@ -176,7 +167,7 @@ export default function PlanPage() {
                   </thead>
                   <tbody>
                     {plan.legs.map((l, i) => (
-                      <tr key={l.asset} className="border-b border-stone-100 dark:border-stone-900">
+                      <tr key={l.asset} className="border-b border-stone-100 last:border-0 dark:border-stone-800/60">
                         <td className="py-1.5 pr-3">{i + 1}</td>
                         <td className="py-1.5 pr-3">{l.asset}</td>
                         <td className="py-1.5 pr-3 text-right">{formatAmount(l.qty.toDecimalPlaces(8).toString())}</td>
@@ -199,7 +190,7 @@ export default function PlanPage() {
               )}
             </div>
           )}
-        </section>
+        </Card>
       )}
     </div>
   );

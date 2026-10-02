@@ -11,6 +11,7 @@ import { buildAccounts } from "@/lib/reconcile/accounts";
 import { judgeDiff, type DiffKind } from "@/lib/reconcile/diff";
 import { applyAdjustment, ignoreDiff, ignoredDiffs, runReconciliation } from "@/lib/reconcile/run";
 import { VaultPanel } from "@/components/VaultPanel";
+import { btn, Callout, Card, Empty, ErrorText, inputCls, PageHeader, Progress, Stat } from "@/components/ui";
 
 type Row = ReconciliationRecord["rows"][number];
 
@@ -31,8 +32,8 @@ const KIND_CLS: Record<DiffKind, string> = {
   unexplained_loss: "text-red-600",
 };
 
-const smallBtn = "rounded-lg border border-stone-300 px-2.5 py-1 text-xs dark:border-stone-700";
-const primaryBtn = "rounded-lg bg-stone-900 px-2.5 py-1 text-xs text-white dark:bg-stone-100 dark:text-stone-900";
+const smallBtn = btn("secondary", "sm");
+const primaryBtn = btn("primary", "sm");
 
 function DiffRow({ record, row, onDone }: { record: ReconciliationRecord; row: Row; onDone: () => void }) {
   const j = judgeDiff(toRow(row));
@@ -47,7 +48,7 @@ function DiffRow({ record, row, onDone }: { record: ReconciliationRecord; row: R
   }
 
   return (
-    <li className="space-y-2 border-t border-stone-100 py-3 text-sm dark:border-stone-900">
+    <li className="space-y-2 border-t border-stone-100 py-3 text-sm dark:border-stone-800">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="font-medium">{row.asset}</span>
         <span className="text-xs text-stone-500">{row.location}</span>
@@ -77,7 +78,7 @@ function DiffRow({ record, row, onDone }: { record: ReconciliationRecord; row: R
             ) : (
               <>
                 <input
-                  className="w-36 rounded-lg border border-stone-300 bg-transparent px-2 py-1 text-xs dark:border-stone-700"
+                  className={`${inputCls} w-40 py-1 text-xs`}
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
                   placeholder="취득가 (원, 선택)"
@@ -145,67 +146,56 @@ export default function ReconcilePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold">잔고 대사</h2>
-        <p className="text-sm text-stone-500">
-          거래 내역으로 계산한 잔고와 실제 잔고를 계정·자산별로 비교합니다. 모두 일치하면 빠진 거래가 없다는 가장 강력한
-          근거가 되고, 차이가 있으면 놓친 보상·입출금·손실이 있다는 신호입니다. 대사 전에 지갑과 지원하는 거래소의 최신
-          내역을 먼저 가져옵니다.
-        </p>
-      </div>
+      <PageHeader
+        step={2}
+        title="동기화·잔고 대사"
+        description="연결한 모든 계정의 최신 거래 내역을 가져온 뒤, 거래 내역으로 계산한 잔고와 실제 잔고를 비교합니다. 모두 일치하면 빠진 거래가 없다는 가장 강력한 근거가 되고, 차이가 있으면 놓친 보상·입출금·손실이 있다는 신호입니다."
+        actions={
+          <button onClick={run} disabled={busy} className={btn()}>
+            {busy ? "진행 중…" : "동기화 + 대사 실행"}
+          </button>
+        }
+      />
 
       {hasExchange && <VaultPanel />}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={run}
-          disabled={busy}
-          className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900"
-        >
-          {busy ? "대사 중…" : "전체 대사 실행"}
-        </button>
-        <span className="text-sm text-stone-500">{progress}</span>
-        {records && records.length > 0 && !busy && (
-          <span className="text-xs text-stone-400">마지막 실행 {formatDateTime(Math.max(...records.map((r) => r.at)))}</span>
-        )}
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {(busy || (records && records.length > 0)) && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Progress text={progress} />
+          {records && records.length > 0 && !busy && <span className="text-xs text-stone-500">마지막 실행 {formatDateTime(Math.max(...records.map((r) => r.at)))}</span>}
+        </div>
+      )}
+      <ErrorText>{error}</ErrorText>
 
       {all.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            ["일치", matched, "text-emerald-700 dark:text-emerald-400"],
-            ["리베이스 증가", counts.filter((k) => k === "rebasing_gain").length, "text-sky-700 dark:text-sky-400"],
-            ["설명되지 않는 증가", counts.filter((k) => k === "unexplained_gain").length, "text-amber-700 dark:text-amber-400"],
-            ["설명되지 않는 감소", counts.filter((k) => k === "unexplained_loss").length, "text-red-600"],
-          ].map(([label, n, cls]) => (
-            <div key={label as string} className="rounded-xl border border-stone-200 p-3 dark:border-stone-800">
-              <p className="text-xs text-stone-500">{label}</p>
-              <p className={`text-2xl font-bold tabular-nums ${cls}`}>{n}</p>
-            </div>
-          ))}
+          <Stat label="일치" value={matched} tone="success" />
+          <Stat label="리베이스 증가" value={counts.filter((k) => k === "rebasing_gain").length} tone="info" />
+          <Stat label="설명되지 않는 증가" value={counts.filter((k) => k === "unexplained_gain").length} tone="warn" />
+          <Stat label="설명되지 않는 감소" value={counts.filter((k) => k === "unexplained_loss").length} tone="danger" />
         </div>
       )}
 
-      {records?.length === 0 && <p className="text-sm text-stone-500">아직 대사를 실행하지 않았습니다.</p>}
+      {records?.length === 0 && <Empty>아직 대사를 실행하지 않았습니다. 오른쪽 위 버튼을 누르세요.</Empty>}
 
       <ul className="space-y-4">
         {(records ?? []).map((r) => {
           const diffs = open(r);
           return (
-            <li key={r.key} className="rounded-xl border border-stone-200 p-4 dark:border-stone-800">
-              <div className="flex flex-wrap items-baseline gap-2">
+            <Card as="li" key={r.key}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${r.status !== "ok" ? "bg-stone-300" : diffs.length ? "bg-amber-400" : "bg-emerald-500"}`} />
                 <h3 className="font-semibold">{r.label}</h3>
                 {r.status === "ok" && (
-                  <span className={`text-sm ${diffs.length ? "text-red-600" : "text-emerald-600"}`}>
+                  <span className={`text-sm ${diffs.length ? "text-amber-700 dark:text-amber-400" : "text-emerald-600"}`}>
                     {diffs.length ? `차이 ${diffs.length}건` : "모두 일치"} · 자산 {r.rows.length}개
                   </span>
                 )}
               </div>
               {r.status === "no_history" && (
                 <p className="mt-1 text-sm text-stone-500">
-                  거래 내역이 없어 대사할 수 없습니다. 원장 화면에서 내역을 동기화하거나, 같은 거래소의 CSV를 &lsquo;같은 계정&rsquo;으로
-                  연결하세요.
+                  거래 내역이 없어 대사할 수 없습니다. 거래소에서 받은 거래내역 파일을 이 계정과 &lsquo;같은 계정&rsquo;으로 연결하면 대사할 수
+                  있습니다.
                 </p>
               )}
               {r.status === "error" && <p className="mt-1 text-sm text-red-600">{r.error}</p>}
@@ -222,22 +212,21 @@ export default function ReconcilePage() {
                   ))}
                 </ul>
               )}
-            </li>
+            </Card>
           );
         })}
       </ul>
 
       {csvOnly.length > 0 && (
-        <section className="rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
-          <p className="font-medium">대사할 수 없는 CSV 계정</p>
-          <p className="mt-1 text-stone-500">
+        <Callout tone="neutral" title="대사할 수 없는 CSV 계정">
+          <p>
             실제 잔고를 조회할 방법이 없습니다. 같은 거래소의 API 키를 추가하고{" "}
             <Link href="/sources" className="underline">
               연결 계정
             </Link>
             에서 &lsquo;같은 계정&rsquo;으로 연결하면 대사할 수 있습니다: {csvOnly.map((c) => c.label).join(", ")}
           </p>
-        </section>
+        </Callout>
       )}
 
       {handled.size > 0 && (

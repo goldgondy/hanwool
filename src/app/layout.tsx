@@ -1,12 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
+import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+import { AppNav } from "@/components/AppNav";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -20,46 +16,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="ko"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">
-        <header className="no-print border-b border-stone-200 dark:border-stone-800">
-          <nav className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3 text-sm">
-            <Link href="/" className="font-semibold">
-              Crypto Tax Engine
-            </Link>
-            <Link href="/" className="text-stone-500 hover:text-foreground">
-              스냅샷
-            </Link>
-            <Link href="/ledger" className="text-stone-500 hover:text-foreground">
-              원장
-            </Link>
-            <Link href="/reconcile" className="text-stone-500 hover:text-foreground">
-              잔고 대사
-            </Link>
-            <Link href="/review" className="text-stone-500 hover:text-foreground">
-              분류 검토
-            </Link>
-            <Link href="/tax" className="text-stone-500 hover:text-foreground">
-              세금 계산
-            </Link>
-            <Link href="/plan" className="text-stone-500 hover:text-foreground">
-              절세 도구
-            </Link>
-            <Link href="/foreign" className="text-stone-500 hover:text-foreground">
-              해외계좌 신고
-            </Link>
-            <Link href="/sources" className="text-stone-500 hover:text-foreground">
-              연결 계정
-            </Link>
-            <span className="ml-auto text-xs text-stone-400">
-              데이터는 이 브라우저에만 저장됩니다
-            </span>
-          </nav>
-        </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
+    <html lang="ko" className={`${geistMono.variable} h-full antialiased`}>
+      <body className="min-h-full lg:flex">
+        <AppNav />
+        <main className="min-w-0 flex-1">
+          <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-10 lg:py-10">{children}</div>
+        </main>
       </body>
     </html>
   );

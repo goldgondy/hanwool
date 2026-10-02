@@ -5,28 +5,28 @@ import { useParams, useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Holding } from "@/lib/db";
 import { formatAmount, formatDateTime, formatKrw } from "@/lib/format";
+import { btn, Callout, Card, Table, td, th, trCls } from "@/components/ui";
 
 function HoldingTable({ rows }: { rows: Holding[] }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-stone-500">
+    <Table>
+        <thead>
           <tr className="border-b border-stone-200 dark:border-stone-800">
-            <th className="py-2 pr-4 font-medium">계정 / 위치</th>
-            <th className="py-2 pr-4 font-medium">자산</th>
-            <th className="py-2 pr-4 text-right font-medium">수량</th>
-            <th className="py-2 pr-4 text-right font-medium">원화 단가</th>
-            <th className="py-2 text-right font-medium">평가액</th>
+            <th className={th}>계정 / 위치</th>
+            <th className={th}>자산</th>
+            <th className={`${th} text-right`}>수량</th>
+            <th className={`${th} text-right`}>원화 단가</th>
+            <th className={`${th} text-right`}>평가액</th>
           </tr>
         </thead>
-        <tbody className="tabular-nums">
+        <tbody>
           {rows.map((h, i) => (
-            <tr key={i} className="border-b border-stone-100 dark:border-stone-900">
-              <td className="py-2 pr-4">
+            <tr key={i} className={trCls}>
+              <td className={td}>
                 {h.sourceLabel}
                 <span className="block text-xs text-stone-500">{h.location}</span>
               </td>
-              <td className="py-2 pr-4">
+              <td className={td}>
                 {h.asset}
                 {h.rawAsset !== h.asset && (
                   <span className="block max-w-48 truncate font-mono text-xs text-stone-500" title={h.rawAsset}>
@@ -34,19 +34,18 @@ function HoldingTable({ rows }: { rows: Holding[] }) {
                   </span>
                 )}
               </td>
-              <td className="py-2 pr-4 text-right">{formatAmount(h.amount)}</td>
-              <td className="py-2 pr-4 text-right">
+              <td className={`${td} text-right`}>{formatAmount(h.amount)}</td>
+              <td className={`${td} text-right`}>
                 {formatKrw(h.priceKrw)}
                 {h.priceVia && h.priceVia !== "Upbit" && (
                   <span className="block text-xs text-stone-500">{h.priceVia}</span>
                 )}
               </td>
-              <td className="py-2 text-right">{formatKrw(h.valueKrw)}</td>
+              <td className={`${td} text-right`}>{formatKrw(h.valueKrw)}</td>
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+    </Table>
   );
 }
 
@@ -83,22 +82,22 @@ export default function SnapshotPage() {
   async function remove() {
     if (!window.confirm("이 스냅샷을 삭제할까요?")) return;
     await db.snapshots.delete(id);
-    router.push("/");
+    router.push("/snapshots");
   }
 
   return (
     <div className="space-y-8">
       <div className="no-print flex flex-wrap gap-2 text-sm">
-        <Link href="/" className="mr-auto text-stone-500 hover:underline">
-          ← 목록
+        <Link href="/snapshots" className="mr-auto text-stone-500 hover:underline">
+          ← 보유 기록
         </Link>
-        <button onClick={() => window.print()} className="rounded-lg border border-stone-300 px-3 py-1.5 dark:border-stone-700">
+        <button onClick={() => window.print()} className={btn("secondary", "sm")}>
           인쇄 / PDF 저장
         </button>
-        <button onClick={exportJson} className="rounded-lg border border-stone-300 px-3 py-1.5 dark:border-stone-700">
+        <button onClick={exportJson} className={btn("secondary", "sm")}>
           JSON 내보내기
         </button>
-        <button onClick={remove} className="rounded-lg px-3 py-1.5 text-red-600">
+        <button onClick={remove} className={btn("danger", "sm")}>
           삭제
         </button>
       </div>
@@ -115,32 +114,30 @@ export default function SnapshotPage() {
       </header>
 
       {snapshot.errors.length > 0 && (
-        <section className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm dark:border-red-800 dark:bg-red-950/40">
-          <p className="font-medium text-red-700 dark:text-red-400">
-            일부 계정이나 항목을 조회하지 못했습니다. 해당 부분은 이 기록에
-            포함되지 않았습니다.
-          </p>
-          <ul className="mt-2 list-disc pl-5">
+        <Callout tone="danger" title="일부 계정이나 항목을 조회하지 못했습니다. 해당 부분은 이 기록에 포함되지 않았습니다.">
+          <ul className="list-disc pl-5">
             {snapshot.errors.map((e, i) => (
               <li key={i}>
                 {e.sourceLabel}: {e.message}
               </li>
             ))}
           </ul>
-        </section>
+        </Callout>
       )}
 
-      <HoldingTable rows={priced} />
+      <Card>
+        <HoldingTable rows={priced} />
+      </Card>
 
       {unpriced.length > 0 && (
-        <section className="space-y-2">
+        <Card as="section" className="space-y-2">
           <h2 className="font-semibold">원화 시세를 찾지 못한 자산 ({unpriced.length})</h2>
           <p className="text-xs text-stone-500">
             업비트에 상장되지 않은 토큰입니다. 수량은 기록되었으며, 스팸 토큰일 수
             있습니다. 평가액 합계에서는 제외됩니다.
           </p>
           <HoldingTable rows={unpriced} />
-        </section>
+        </Card>
       )}
 
       <p className="text-xs leading-5 text-stone-500">

@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import Decimal from "@/lib/decimal";
-import { db } from "@/lib/db";
-import { ignoredDiffs } from "@/lib/reconcile/run";
 import { CATEGORY_LABEL } from "@/lib/classify/types";
 import { formatAmount, formatDateTime, formatKrw } from "@/lib/format";
 import { calculate, type Mode, type Report } from "@/lib/tax/calculate";
+import { reconcileStatus } from "@/lib/readiness";
+import { btn, Callout, Card, ErrorText, PageHeader, Pill, Progress, trCls } from "@/components/ui";
 
 // 금액을 누르면 숫자만(쉼표 없이) 복사된다. 홈택스 입력칸에 그대로 붙여넣을 수 있다.
 function Row({ label, value, strong, copy }: { label: string; value: string; strong?: boolean; copy?: string }) {
@@ -54,14 +54,7 @@ export default function TaxPage() {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   // 최근 잔고 대사 결과: 설명되지 않은 차이가 있으면 세액이 틀릴 수 있다 (무시한 차이는 제외)
-  const reconcile = useLiveQuery(async () => {
-    const records = await db.reconciliations.toArray();
-    const ignored = await ignoredDiffs(records);
-    const open = records.flatMap((r) =>
-      r.status === "ok" ? r.rows.filter((row) => !new Decimal(row.diff).isZero() && !ignored.has(`${r.key}:${row.assetKey}`)) : [],
-    );
-    return { ran: records.length > 0, open: open.length, lastAt: records.length ? Math.max(...records.map((r) => r.at)) : null };
-  }, []);
+  const reconcile = useLiveQuery(reconcileStatus, []);
 
   async function run() {
     setBusy(true);
@@ -82,40 +75,36 @@ export default function TaxPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-lg font-semibold">세금 계산</h2>
-        <p className="text-sm text-stone-500">
-          연결한 모든 계정의 원장과 분류를 바탕으로 연도별 양도손익과 예상 세액을 계산합니다. 스테이블코인과
-          교환한 거래는 실제로 주고받은 금액을, 그 밖에는 거래 직전에 마감된 1분 캔들 종가(업비트, 없으면
-          바이낸스 × 환율)를 원화 시세로 씁니다.
-        </p>
-      </div>
+      <PageHeader
+        step={4}
+        title="세금 계산·신고"
+        description="연결한 모든 계정의 거래와 분류로 연도별 양도손익과 예상 세액을 계산하고, 신고용 엑셀과 홈택스 입력 안내를 드립니다. 원화 시세는 스테이블코인 거래면 실제 주고받은 금액, 그 밖에는 거래 직전 1분 시세(업비트, 없으면 바이낸스 × 환율)를 씁니다."
+      />
 
-      <div className="flex flex-wrap items-center gap-3">
+      <Card className="flex flex-wrap items-center gap-3">
         {(
           [
             ["actual", "실제 계산 (2027년부터 과세)"],
-            ["simulate", "모의 계산 (모든 거래에 과세한다면)"],
+            ["simulate", "모의 계산 (지금까지 거래에 과세한다면)"],
           ] as [Mode, string][]
         ).map(([m, label]) => (
-          <label key={m} className="flex items-center gap-1.5 text-sm">
-            <input type="radio" checked={mode === m} onChange={() => setMode(m)} />
+          <Pill key={m} active={mode === m} onClick={() => setMode(m)}>
             {label}
-          </label>
+          </Pill>
         ))}
-        <button
-          onClick={run}
-          disabled={busy}
-          className="rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900"
-        >
+        <button onClick={run} disabled={busy} className={`${btn()} sm:ml-auto`}>
           {busy ? "계산 중…" : "계산하기"}
         </button>
-        <span className="text-sm text-stone-500">{progress}</span>
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+        {progress && (
+          <div className="basis-full">
+            <Progress text={progress} />
+          </div>
+        )}
+      </Card>
+      <ErrorText>{error}</ErrorText>
 
       {reconcile && (!reconcile.ran || reconcile.open > 0) && (
-        <section className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm dark:border-red-800 dark:bg-red-950/40">
+        <Callout tone={reconcile.ran ? "danger" : "warn"}>
           {reconcile.ran ? (
             <p>
               <b>잔고 대사에서 설명되지 않은 차이 {reconcile.open}건</b>이 있습니다 (마지막 대사 {formatDateTime(reconcile.lastAt!)}).
@@ -134,19 +123,19 @@ export default function TaxPage() {
               로 먼저 확인하는 것을 권합니다.
             </p>
           )}
-        </section>
+        </Callout>
       )}
 
       {report && (
         <>
           {report.built.unresolved.length > 0 && (
-            <section className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-700 dark:bg-amber-950/40">
-              <p className="font-medium">
+            <Callout tone="warn">
+              <p className="font-semibold">
                 확인하지 않은 거래 {report.built.unresolved.length}건
                 {unresolvedValue && !unresolvedValue.isZero() && <> (시가 기준 약 {formatKrw(unresolvedValue.toFixed(0))}</>}
                 {unresolvedValue && !unresolvedValue.isZero() && (unresolvedUnknown > 0 ? ` + 금액 미상 ${unresolvedUnknown}건)` : ")")}
               </p>
-              <p className="mt-1 text-stone-600 dark:text-stone-400">
+              <p className="mt-1">
                 기본 정책대로 계산에 넣었습니다 (외부로 보냄 = 시가로 양도, 외부에서 받음 = 취득가 0원). 실제와 다르면
                 세액이 달라지므로{" "}
                 <Link href="/review" className="underline">
@@ -154,23 +143,23 @@ export default function TaxPage() {
                 </Link>
                 에서 확인하세요.
               </p>
-              <ul className="mt-2 space-y-0.5 text-xs text-stone-600 dark:text-stone-400">
+              <ul className="mt-2 space-y-0.5 text-xs opacity-80">
                 {report.built.unresolved.slice(0, 5).map((u) => (
                   <li key={u.key}>
                     {formatDateTime(u.time)} · {CATEGORY_LABEL[u.category]} · {u.valueKrw ? formatKrw(u.valueKrw.toFixed(0)) : "금액 미상"}
                   </li>
                 ))}
               </ul>
-            </section>
+            </Callout>
           )}
 
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-semibold">연도별 예상 세액{report.mode === "simulate" && " (모의)"}</h3>
+              <h2 className="text-lg font-semibold">연도별 예상 세액{report.mode === "simulate" && " (모의)"}</h2>
               <button
                 type="button"
                 onClick={() => downloadReport(report).catch((e) => setError(e instanceof Error ? e.message : String(e)))}
-                className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700"
+                className={btn()}
               >
                 {report.mode === "simulate" ? "모의 계산 엑셀 내려받기" : "신고 자료 엑셀 내려받기"}
               </button>
@@ -187,8 +176,12 @@ export default function TaxPage() {
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
                 {report.engine.years.map((y) => (
-                  <div key={y.year} className="space-y-1.5 rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
-                    <p className="text-base font-semibold">{y.year}년 귀속 · 양도 {y.disposalCount}건</p>
+                  <Card key={y.year} className="space-y-1.5 text-sm">
+                    <div className="mb-3 flex items-baseline justify-between gap-2">
+                      <p className="text-base font-semibold">{y.year}년 귀속</p>
+                      <p className="text-xs text-stone-500">양도 {y.disposalCount}건</p>
+                    </div>
+                    <p className="pb-2 text-3xl font-bold tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300">{formatKrw(y.totalTaxKrw.toFixed(0))}</p>
                     <Row label="양도 이익 합계" value={formatKrw(y.gainKrw.toFixed(0))} copy={y.gainKrw.toFixed(0)} />
                     <Row label="양도 손실 합계" value={formatKrw(y.lossKrw.toFixed(0))} copy={y.lossKrw.toFixed(0)} />
                     <Row label="소득금액 (손익 통산)" value={formatKrw(y.netKrw.toFixed(0))} copy={y.netKrw.toFixed(0)} />
@@ -199,14 +192,14 @@ export default function TaxPage() {
                     <div className="border-t border-stone-200 pt-1.5 dark:border-stone-800">
                       <Row label="예상 세액" value={formatKrw(y.totalTaxKrw.toFixed(0))} strong copy={y.totalTaxKrw.toFixed(0)} />
                     </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
             )}
           </section>
 
           {report.mode === "actual" && report.engine.deemed.length > 0 && (
-            <section className="space-y-2">
+            <Card as="section" className="space-y-2">
               <h3 className="font-semibold">의제취득가 적용 (2026년 말 보유분)</h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm tabular-nums">
@@ -221,7 +214,7 @@ export default function TaxPage() {
                   </thead>
                   <tbody>
                     {report.engine.deemed.map((d) => (
-                      <tr key={d.asset} className="border-b border-stone-100 dark:border-stone-900">
+                      <tr key={d.asset} className={trCls}>
                         <td className="py-1.5 pr-4">{d.asset}</td>
                         <td className="py-1.5 pr-4 text-right">{formatAmount(d.qty.toString())}</td>
                         <td className="py-1.5 pr-4 text-right">{formatKrw(d.actualCostKrw.toFixed(0))}</td>
@@ -233,11 +226,11 @@ export default function TaxPage() {
                 </table>
               </div>
               <p className="text-xs text-stone-500">2026년 말 시가는 연말이 지나면 채워집니다. 그 전까지는 실제 취득가를 씁니다.</p>
-            </section>
+            </Card>
           )}
 
           {taxable.length > 0 && (
-            <section className="space-y-2">
+            <Card as="section" className="space-y-2">
               <h3 className="font-semibold">양도 내역 ({taxable.length}건)</h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm tabular-nums">
@@ -253,7 +246,7 @@ export default function TaxPage() {
                   </thead>
                   <tbody>
                     {taxable.slice(0, 200).map((d, i) => (
-                      <tr key={`${d.ref}:${i}`} className="border-b border-stone-100 dark:border-stone-900">
+                      <tr key={`${d.ref}:${i}`} className={trCls}>
                         <td className="whitespace-nowrap py-1.5 pr-4">{formatDateTime(d.time)}</td>
                         <td className="py-1.5 pr-4">
                           {d.asset}
@@ -271,11 +264,11 @@ export default function TaxPage() {
                 </table>
               </div>
               {taxable.length > 200 && <p className="text-xs text-stone-500">최근 200건만 표시합니다.</p>}
-            </section>
+            </Card>
           )}
 
           {(report.engine.warnings.length > 0 || report.built.unpriced.length > 0) && (
-            <section className="space-y-1 text-sm">
+            <Card as="section" className="space-y-1 text-sm">
               <h3 className="font-semibold">확인이 필요한 점</h3>
               {report.built.unpriced.length > 0 && (
                 <p className="text-amber-700 dark:text-amber-400">
@@ -295,12 +288,12 @@ export default function TaxPage() {
               {report.engine.warnings.length > 20 && (
                 <p className="text-xs text-stone-500">외 {report.engine.warnings.length - 20}건</p>
               )}
-            </section>
+            </Card>
           )}
 
           {report.mode === "actual" && report.engine.years.length > 0 && (
-            <section className="space-y-2 rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
-              <h3 className="font-semibold">신고하는 방법 (스스로 신고하는 경우)</h3>
+            <Card as="section" className="space-y-2 border-indigo-200 text-sm dark:border-indigo-900">
+              <h3 className="font-semibold">📝 신고하는 방법 (스스로 신고하는 경우)</h3>
               <ol className="list-decimal space-y-1 pl-5 text-stone-600 dark:text-stone-400">
                 <li>
                   신고 기간: 과세 기간(1~12월) 다음 해 <b>5월 1일~31일</b>. 2027년에 판 코인은 2028년 5월에 신고합니다.
@@ -317,7 +310,7 @@ export default function TaxPage() {
                 ※ 2028년 5월이 첫 신고라 홈택스 화면과 서식은 아직 정해지지 않았습니다. 국세청 안내가 나오면 이 안내를 갱신합니다. 해외 거래소에 둔 자산이
                 어느 달 말일이든 합계 5억원을 넘었다면, 매년 6월 해외금융계좌 신고 대상인지도 확인하세요.
               </p>
-            </section>
+            </Card>
           )}
 
           <p className="text-xs leading-5 text-stone-500">

@@ -9,12 +9,13 @@ import { CATEGORY_LABEL, USER_SELECTABLE, type Category, type ClassificationStat
 import { formatAmount, formatDateTime } from "@/lib/format";
 import { EVM_CHAINS } from "@/lib/sources/evm";
 import type { EvmChain } from "@/lib/db";
+import { Badge, btn, Card, Empty, inputCls, PageHeader, Pill, Stat } from "@/components/ui";
 
-const STATUS: Record<ClassificationStatus, { label: string; cls: string }> = {
-  needs_review: { label: "검토 필요", cls: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
-  suggested: { label: "추정", cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
-  confirmed: { label: "확정", cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
-  user: { label: "사용자 지정", cls: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
+const STATUS: Record<ClassificationStatus, { label: string; tone: "danger" | "warn" | "success" | "info" }> = {
+  needs_review: { label: "검토 필요", tone: "danger" },
+  suggested: { label: "추정", tone: "warn" },
+  confirmed: { label: "확정", tone: "success" },
+  user: { label: "사용자 지정", tone: "info" },
 };
 
 type Filter = "todo" | ClassificationStatus | "all";
@@ -27,7 +28,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "전체" },
 ];
 
-const input = "rounded-lg border border-stone-300 bg-transparent px-2 py-1 text-sm dark:border-stone-700";
+const input = `${inputCls} w-auto py-1.5`;
 
 function txUrl(groupKey: string) {
   const [chain, hash] = groupKey.split(":");
@@ -59,9 +60,9 @@ function GroupCard({ group, sourceLabels }: { group: GroupView; sourceLabels: Ma
   const url = txUrl(group.key);
 
   return (
-    <li className="space-y-3 rounded-xl border border-stone-200 p-4 dark:border-stone-800">
+    <Card as="li" className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS[c.status].cls}`}>{STATUS[c.status].label}</span>
+        <Badge tone={STATUS[c.status].tone}>{STATUS[c.status].label}</Badge>
         <span className="font-semibold">{CATEGORY_LABEL[c.category]}</span>
         <span className="text-stone-500">{c.reason}</span>
         <span className="ml-auto text-xs tabular-nums text-stone-500">
@@ -80,7 +81,7 @@ function GroupCard({ group, sourceLabels }: { group: GroupView; sourceLabels: Ma
       <table className="w-full text-sm tabular-nums">
         <tbody>
           {group.entries.map((e) => (
-            <tr key={e.id} className="border-t border-stone-100 dark:border-stone-900">
+            <tr key={e.id} className="border-t border-stone-100 dark:border-stone-800">
               <td className="py-1 pr-3">{sourceLabels.get(e.sourceId) ?? "?"}</td>
               <td className="py-1 pr-3 text-stone-500">{e.location}</td>
               <td className="py-1 pr-3">{e.kind === "fee" ? `${e.asset} (수수료)` : e.asset}</td>
@@ -107,12 +108,12 @@ function GroupCard({ group, sourceLabels }: { group: GroupView; sourceLabels: Ma
         )}
         <input className={`${input} min-w-40 flex-1`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="메모 (예: 친구 A에게 선물)" />
         {c.status === "suggested" && !changed && (
-          <button onClick={() => save(c.category)} className="rounded-lg border border-stone-300 px-3 py-1 text-sm dark:border-stone-700">
+          <button onClick={() => save(c.category)} className={btn("secondary")}>
             맞아요
           </button>
         )}
         {changed && (
-          <button onClick={() => save()} className="rounded-lg bg-stone-900 px-3 py-1 text-sm text-white dark:bg-stone-100 dark:text-stone-900">
+          <button onClick={() => save()} className={btn()}>
             저장
           </button>
         )}
@@ -125,7 +126,7 @@ function GroupCard({ group, sourceLabels }: { group: GroupView; sourceLabels: Ma
       {category === "external_in" && (
         <p className="text-xs text-stone-500">취득가를 비워 두면 0원으로 계산합니다 (세금이 가장 크게 나오는 쪽).</p>
       )}
-    </li>
+    </Card>
   );
 }
 
@@ -145,48 +146,35 @@ export default function ReviewPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold">거래 분류 검토</h2>
-        <p className="text-sm text-stone-500">
-          원장의 거래마다 세금 관점의 분류를 붙입니다. 앱이 확실히 판단한 것은 &lsquo;확정&rsquo;, 추측한 것은
-          &lsquo;추정&rsquo;, 알 수 없는 것은 &lsquo;검토 필요&rsquo;로 표시합니다. 직접 정한 분류는 다시 동기화해도
-          유지됩니다.
-        </p>
-      </div>
+      <PageHeader
+        step={3}
+        title="분류 검토"
+        description={
+          <>
+            거래마다 세금 관점의 분류를 붙입니다. 확실한 것은 &lsquo;확정&rsquo;, 추측한 것은 &lsquo;추정&rsquo;, 알 수 없는 것은 &lsquo;검토 필요&rsquo;로
+            표시합니다. <b>검토 필요</b>만 처리하면 되고, 직접 정한 분류는 다시 동기화해도 유지됩니다.
+          </>
+        }
+      />
 
       {groups && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {(["needs_review", "suggested", "confirmed", "user"] as ClassificationStatus[]).map((s) => (
-            <div key={s} className="rounded-xl border border-stone-200 p-3 dark:border-stone-800">
-              <p className="text-xs text-stone-500">{STATUS[s].label}</p>
-              <p className="text-2xl font-bold tabular-nums">{count(s)}</p>
-            </div>
+            <Stat key={s} label={STATUS[s].label} value={count(s)} tone={s === "needs_review" && count(s) > 0 ? "danger" : s === "suggested" && count(s) > 0 ? "warn" : "neutral"} />
           ))}
         </div>
       )}
 
       <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`rounded-full border px-3 py-1 text-sm ${
-              filter === f.key
-                ? "border-stone-900 bg-stone-900 text-white dark:border-stone-100 dark:bg-stone-100 dark:text-stone-900"
-                : "border-stone-300 dark:border-stone-700"
-            }`}
-          >
+          <Pill key={f.key} active={filter === f.key} onClick={() => setFilter(f.key)}>
             {f.label}
-          </button>
+          </Pill>
         ))}
       </div>
 
-      {groups?.length === 0 && (
-        <p className="text-sm text-stone-500">원장이 비어 있습니다. 원장 화면에서 먼저 내역을 동기화하세요.</p>
-      )}
-      {groups && groups.length > 0 && shown.length === 0 && (
-        <p className="text-sm text-stone-500">이 조건에 해당하는 거래가 없습니다.</p>
-      )}
+      {groups?.length === 0 && <Empty>거래 내역이 없습니다. 2단계 &lsquo;동기화·잔고 대사&rsquo;에서 먼저 내역을 가져오세요.</Empty>}
+      {groups && groups.length > 0 && shown.length === 0 && <Empty>이 조건에 해당하는 거래가 없습니다.</Empty>}
 
       <ul className="space-y-3">
         {shown.slice(0, 200).map((g) => (
