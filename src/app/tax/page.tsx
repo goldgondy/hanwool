@@ -66,13 +66,41 @@ async function calculate(mode: Mode, onProgress: (m: string) => void): Promise<R
   return { mode, engine, built, priceCount: queries.length };
 }
 
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+// 금액을 누르면 숫자만(쉼표 없이) 복사된다. 홈택스 입력칸에 그대로 붙여넣을 수 있다.
+function Row({ label, value, strong, copy }: { label: string; value: string; strong?: boolean; copy?: string }) {
+  const [copied, setCopied] = useState(false);
   return (
     <div className={`flex justify-between gap-4 ${strong ? "font-semibold" : ""}`}>
       <span className="text-stone-500">{label}</span>
-      <span className="tabular-nums">{value}</span>
+      {copy ? (
+        <button
+          type="button"
+          title="눌러서 복사"
+          className="tabular-nums underline decoration-dotted underline-offset-4 hover:text-stone-900 dark:hover:text-stone-100"
+          onClick={async () => {
+            await navigator.clipboard.writeText(copy);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+        >
+          {copied ? "복사됨" : value}
+        </button>
+      ) : (
+        <span className="tabular-nums">{value}</span>
+      )}
     </div>
   );
+}
+
+async function downloadReport(report: Report) {
+  const { buildTaxWorkbook } = await import("@/lib/tax/report-xlsx");
+  const blob = await buildTaxWorkbook(report);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `가상자산-세금-${report.mode === "simulate" ? "모의계산" : "신고자료"}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function TaxPage() {
@@ -193,7 +221,19 @@ export default function TaxPage() {
           )}
 
           <section className="space-y-3">
-            <h3 className="font-semibold">연도별 예상 세액{report.mode === "simulate" && " (모의)"}</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold">연도별 예상 세액{report.mode === "simulate" && " (모의)"}</h3>
+              <button
+                type="button"
+                onClick={() => downloadReport(report).catch((e) => setError(e instanceof Error ? e.message : String(e)))}
+                className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700"
+              >
+                {report.mode === "simulate" ? "모의 계산 엑셀 내려받기" : "신고 자료 엑셀 내려받기"}
+              </button>
+            </div>
+            <p className="text-xs text-stone-500">
+              엑셀에는 신고요약(연도별)·자산별손익·양도명세·의제취득가·확인필요 시트가 들어 있습니다. 아래 금액을 누르면 숫자만 복사됩니다.
+            </p>
             {report.engine.years.length === 0 ? (
               <p className="text-sm text-stone-500">
                 {report.mode === "actual"
@@ -205,15 +245,15 @@ export default function TaxPage() {
                 {report.engine.years.map((y) => (
                   <div key={y.year} className="space-y-1.5 rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
                     <p className="text-base font-semibold">{y.year}년 귀속 · 양도 {y.disposalCount}건</p>
-                    <Row label="양도 이익 합계" value={formatKrw(y.gainKrw.toFixed(0))} />
-                    <Row label="양도 손실 합계" value={formatKrw(y.lossKrw.toFixed(0))} />
-                    <Row label="손익 통산" value={formatKrw(y.netKrw.toFixed(0))} />
-                    <Row label="기본공제" value={formatKrw(y.deductionKrw.neg().toFixed(0))} />
-                    <Row label="과세표준" value={formatKrw(y.taxableKrw.toFixed(0))} />
-                    <Row label="소득세 (20%)" value={formatKrw(y.incomeTaxKrw.toFixed(0))} />
-                    <Row label="지방소득세 (2%)" value={formatKrw(y.localTaxKrw.toFixed(0))} />
+                    <Row label="양도 이익 합계" value={formatKrw(y.gainKrw.toFixed(0))} copy={y.gainKrw.toFixed(0)} />
+                    <Row label="양도 손실 합계" value={formatKrw(y.lossKrw.toFixed(0))} copy={y.lossKrw.toFixed(0)} />
+                    <Row label="소득금액 (손익 통산)" value={formatKrw(y.netKrw.toFixed(0))} copy={y.netKrw.toFixed(0)} />
+                    <Row label="기본공제" value={formatKrw(y.deductionKrw.neg().toFixed(0))} copy={y.deductionKrw.toFixed(0)} />
+                    <Row label="과세표준" value={formatKrw(y.taxableKrw.toFixed(0))} copy={y.taxableKrw.toFixed(0)} />
+                    <Row label="소득세 (20%)" value={formatKrw(y.incomeTaxKrw.toFixed(0))} copy={y.incomeTaxKrw.toFixed(0)} />
+                    <Row label="지방소득세 (2%)" value={formatKrw(y.localTaxKrw.toFixed(0))} copy={y.localTaxKrw.toFixed(0)} />
                     <div className="border-t border-stone-200 pt-1.5 dark:border-stone-800">
-                      <Row label="예상 세액" value={formatKrw(y.totalTaxKrw.toFixed(0))} strong />
+                      <Row label="예상 세액" value={formatKrw(y.totalTaxKrw.toFixed(0))} strong copy={y.totalTaxKrw.toFixed(0)} />
                     </div>
                   </div>
                 ))}
@@ -311,6 +351,28 @@ export default function TaxPage() {
               {report.engine.warnings.length > 20 && (
                 <p className="text-xs text-stone-500">외 {report.engine.warnings.length - 20}건</p>
               )}
+            </section>
+          )}
+
+          {report.mode === "actual" && report.engine.years.length > 0 && (
+            <section className="space-y-2 rounded-xl border border-stone-200 p-4 text-sm dark:border-stone-800">
+              <h3 className="font-semibold">신고하는 방법 (스스로 신고하는 경우)</h3>
+              <ol className="list-decimal space-y-1 pl-5 text-stone-600 dark:text-stone-400">
+                <li>
+                  신고 기간: 과세 기간(1~12월) 다음 해 <b>5월 1일~31일</b>. 2027년에 판 코인은 2028년 5월에 신고합니다.
+                </li>
+                <li>먼저 잔고 대사와 분류 검토에서 남은 항목이 없는지 확인하고, 위 &lsquo;신고 자료 엑셀&rsquo;을 내려받아 보관하세요.</li>
+                <li>홈택스(또는 손택스)에 로그인해 종합소득세 신고 메뉴에서 가상자산 소득(기타소득 분리과세) 신고 화면으로 들어갑니다.</li>
+                <li>
+                  위 연도별 카드의 금액(소득금액·기본공제·과세표준·세액)을 눌러 복사한 뒤 같은 이름의 칸에 붙여넣습니다. 거래 내역 첨부를 요구하면 엑셀의
+                  양도명세 시트를 씁니다.
+                </li>
+                <li>납부할 세액을 확인하고 제출·납부합니다. 지방소득세(2%)는 위택스에서 함께 신고·납부합니다.</li>
+              </ol>
+              <p className="text-xs text-stone-500">
+                ※ 2028년 5월이 첫 신고라 홈택스 화면과 서식은 아직 정해지지 않았습니다. 국세청 안내가 나오면 이 안내를 갱신합니다. 해외 거래소에 둔 자산이
+                어느 달 말일이든 합계 5억원을 넘었다면, 매년 6월 해외금융계좌 신고 대상인지도 확인하세요.
+              </p>
             </section>
           )}
 
