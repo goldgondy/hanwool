@@ -98,6 +98,59 @@ describe("classifyGroup", () => {
   });
 });
 
+describe("R11 거래 번호 없는 이체 짝짓기", () => {
+  const H = 3600_000;
+  const ex = (p: Partial<LedgerEntry> & Pick<LedgerEntry, "amount" | "sourceId" | "groupId" | "time">): LedgerEntry =>
+    e({ asset: "USDT", assetKey: "USDT", origin: "exchange", location: p.sourceId, ...p });
+  const run = (entries: LedgerEntry[]) => classifyAll({ entries, ownAddresses: OWN, decisions: new Map() });
+
+  it("업비트 출금(번호 없음) → 2시간 뒤 바이낸스 입금: 내 계정 간 이체로 제안하고 차이를 수수료로", () => {
+    const groups = run([
+      ex({ sourceId: "upbit", groupId: "up:1", amount: "-100", time: 0 }),
+      ex({ sourceId: "binance", groupId: "bn:dep:1", amount: "99", time: 2 * H, txHash: "0xabc" }),
+    ]);
+    const out = groups.find((g) => g.key === "up:1")!.classification;
+    const inn = groups.find((g) => g.key === "bn:dep:1")!.classification;
+    expect([out.category, out.status, out.rule]).toEqual(["internal_transfer", "suggested", "R11"]);
+    expect(out.pair).toEqual({ key: "bn:dep:1", feeAsset: "USDT", feeQty: "1" });
+    expect([inn.category, inn.pair?.key]).toEqual(["internal_transfer", "up:1"]);
+  });
+
+  it("수량 차이가 5%를 넘거나, 시간이 너무 벌어지거나, 같은 계정이면 짝짓지 않는다", () => {
+    const groups = run([
+      ex({ sourceId: "a", groupId: "a:1", amount: "-100", time: 0 }),
+      ex({ sourceId: "b", groupId: "b:1", amount: "90", time: H }),
+      ex({ sourceId: "a", groupId: "a:2", amount: "-50", time: 0 }),
+      ex({ sourceId: "b", groupId: "b:2", amount: "50", time: 13 * H }),
+      ex({ sourceId: "c", groupId: "c:1", amount: "-30", time: 0 }),
+      ex({ sourceId: "c", groupId: "c:2", amount: "30", time: H }),
+    ]);
+    expect(groups.every((g) => g.classification.rule !== "R11")).toBe(true);
+  });
+
+  it("후보가 여럿이면 수량이 정확히 맞고 시간이 가까운 쪽과 짝짓는다", () => {
+    const groups = run([
+      ex({ sourceId: "a", groupId: "a:1", amount: "-100", time: 0 }),
+      ex({ sourceId: "b", groupId: "b:far", amount: "100", time: 5 * H }),
+      ex({ sourceId: "b", groupId: "b:near", amount: "100", time: H }),
+      ex({ sourceId: "b", groupId: "b:fee", amount: "99.5", time: 10 * 60_000 }),
+    ]);
+    expect(groups.find((g) => g.key === "a:1")!.classification.pair?.key).toBe("b:near");
+    expect(groups.find((g) => g.key === "b:far")!.classification.rule).toBe("R12");
+  });
+
+  it("사용자가 직접 정한 분류는 건드리지 않는다", () => {
+    const decision: Decision = { key: "a:1", category: "external_out", note: "친구에게 보냄", decidedAt: 0 };
+    const groups = classifyAll({
+      entries: [ex({ sourceId: "a", groupId: "a:1", amount: "-100", time: 0 }), ex({ sourceId: "b", groupId: "b:1", amount: "100", time: H })],
+      ownAddresses: OWN,
+      decisions: new Map([["a:1", decision]]),
+    });
+    expect(groups.find((g) => g.key === "a:1")!.classification.status).toBe("user");
+    expect(groups.find((g) => g.key === "b:1")!.classification.rule).toBe("R12");
+  });
+});
+
 describe("classifyAll", () => {
   it("계정이 달라도 같은 groupId는 한 그룹으로 묶는다", () => {
     const groups = classifyAll({

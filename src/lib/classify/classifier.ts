@@ -229,7 +229,7 @@ export function groupByTransaction(entries: LedgerEntry[]): Map<string, LedgerEn
 export function classifyAll({ entries, ownAddresses, decisions }: ClassifyInput): GroupView[] {
   const groups = groupByTransaction(entries);
 
-  return [...groups.entries()]
+  const views = [...groups.entries()]
     .map(([key, list]) => {
       const auto = classifyGroup(key, list, ownAddresses);
       const d = decisions.get(key);
@@ -239,4 +239,81 @@ export function classifyAll({ entries, ownAddresses, decisions }: ClassifyInput)
       return { key, time: Math.min(...list.map((e) => e.time)), entries: list, classification };
     })
     .sort((a, b) => b.time - a.time);
+  matchUnhashedTransfers(views);
+  return views;
+}
+
+// R11: 거래 번호가 없어 R4로 묶이지 못한 내 계정 간 이체를 수량·시각으로 짝짓는다.
+// 예: 업비트 화면 붙여넣기의 USDT 100 출금(거래 번호 없음) → 2시간 뒤 바이낸스 USDT 99 입금 (출금 수수료 1).
+// 조건: 한쪽은 외부로 나감(R13), 다른 쪽은 외부에서 들어옴(R12), 서로 다른 계정, 같은 코인, 한 자산만 이동,
+//       입금이 출금 10분 전 ~ 12시간 뒤, 받은 수량이 보낸 수량 이하이고 차이가 5% 이내. 수량 차이·시간 차가 작은 짝부터 정한다.
+// 추정이므로 "제안" 상태로 두며, 분류 검토에서 사용자가 바꿀 수 있다.
+const PAIR_BEFORE_MS = 10 * 60_000;
+const PAIR_AFTER_MS = 12 * 3600_000;
+const PAIR_MAX_DIFF = new Decimal("0.05");
+
+interface Side {
+  view: GroupView;
+  symbol: string;
+  qty: Decimal;
+  sources: Set<string>;
+  hasHash: boolean;
+  location: string;
+}
+
+function sideOf(view: GroupView, dir: "out" | "in"): Side | null {
+  const c = view.classification;
+  if (c.status === "user" || c.rule !== (dir === "out" ? "R13" : "R12")) return null;
+  const legs = view.entries.filter((e) => e.kind !== "fee" && !isFiatKey(e.assetKey));
+  const symbols = new Set(legs.map((e) => e.asset.toUpperCase()));
+  if (legs.length === 0 || symbols.size !== 1) return null;
+  const qty = legs.reduce((s, e) => s.plus(e.amount), new Decimal(0)).abs();
+  if (qty.isZero()) return null;
+  return {
+    view,
+    symbol: [...symbols][0],
+    qty,
+    sources: new Set(legs.map((e) => e.sourceId)),
+    hasHash: legs.some((e) => !!e.txHash),
+    location: legs[0].location,
+  };
+}
+
+export function matchUnhashedTransfers(views: GroupView[]) {
+  const outs = views.map((v) => sideOf(v, "out")).filter((s): s is Side => !!s);
+  const ins = views.map((v) => sideOf(v, "in")).filter((s): s is Side => !!s);
+  const candidates: { out: Side; in: Side; diff: Decimal; gap: number }[] = [];
+  for (const o of outs) {
+    for (const i of ins) {
+      if (o.symbol !== i.symbol || [...o.sources].some((s) => i.sources.has(s))) continue;
+      if (o.hasHash && i.hasHash) continue; // 둘 다 거래 번호가 있는데 다르면 다른 이동이다
+      const gap = i.view.time - o.view.time;
+      if (gap < -PAIR_BEFORE_MS || gap > PAIR_AFTER_MS) continue;
+      const short = o.qty.minus(i.qty);
+      if (short.isNeg() || short.gt(o.qty.mul(PAIR_MAX_DIFF))) continue;
+      candidates.push({ out: o, in: i, diff: short.div(o.qty), gap: Math.abs(gap) });
+    }
+  }
+  candidates.sort((a, b) => a.diff.comparedTo(b.diff) || a.gap - b.gap);
+  const used = new Set<string>();
+  for (const { out: o, in: i } of candidates) {
+    if (used.has(o.view.key) || used.has(i.view.key)) continue;
+    used.add(o.view.key);
+    used.add(i.view.key);
+    const short = o.qty.minus(i.qty);
+    const hours = Math.round(((i.view.time - o.view.time) / 3600_000) * 10) / 10;
+    const base = { category: "internal_transfer" as const, status: "suggested" as const, rule: "R11" };
+    o.view.classification = {
+      ...base,
+      key: o.view.key,
+      reason: `${i.location}의 입금 ${i.qty.toString()} ${i.symbol}과(와) 수량·시각이 맞아 내 계정 간 이체로 보임 (${hours}시간 뒤 입금${short.isZero() ? "" : `, 차이 ${short.toString()}은 이체 수수료로 봄`})`,
+      pair: { key: i.view.key, ...(short.isZero() ? {} : { feeAsset: o.symbol, feeQty: short.toString() }) },
+    };
+    i.view.classification = {
+      ...base,
+      key: i.view.key,
+      reason: `${o.location}의 출금 ${o.qty.toString()} ${o.symbol}과(와) 수량·시각이 맞아 내 계정 간 이체로 보임`,
+      pair: { key: o.view.key },
+    };
+  }
 }

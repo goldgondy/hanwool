@@ -34,6 +34,16 @@ const brief = (r: ReturnType<typeof buildTaxEvents>) =>
     : ["fee", e.asset, e.qty.toString()],
   );
 
+describe("buildTaxEvents: R11 짝지은 이체", () => {
+  it("보낸 쪽에 기록된 차이(이체 수수료)만 수수료로, 이체 자체는 과세 없음", () => {
+    const out = group("internal_transfer", [leg("USDT", "-100")], "suggested");
+    out.classification.pair = { key: "x", feeAsset: "USDT", feeQty: "1" };
+    const inn = group("internal_transfer", [leg("USDT", "99")], "suggested");
+    inn.classification.pair = { key: out.key };
+    expect(brief(buildTaxEvents([out, inn], prices({})))).toEqual([["fee", "USDT", "1"]]);
+  });
+});
+
 describe("buildTaxEvents", () => {
   it("교환: 판 코인은 시가로 양도, 산 코인은 시가로 취득, 가스비는 수수료", () => {
     const r = buildTaxEvents([group("trade", [leg("USDC", "-2000"), leg("ETH", "0.5"), fee()])], prices({ USDC: "1400", ETH: "5600000" }));

@@ -207,7 +207,17 @@ export function buildTaxEvents(groups: GroupView[], prices: Map<string, Decimal 
         // 정책: 취득가 0원 (팔 때 과세)
         for (const [p, q] of nets) if (q.isPositive()) acquire(p, q, new Decimal(0));
         break;
-      // internal_transfer, wrap, fee_only, fiat_transfer: 수수료 외 과세 없음
+      case "internal_transfer": {
+        // R11로 짝지은 이체에서 받은 수량이 보낸 수량보다 적은 만큼은 이체 수수료 (classifier.ts matchUnhashedTransfers)
+        const pair = g.classification.pair;
+        if (pair?.feeQty && pair.feeAsset) {
+          const pool = poolOf(pair.feeAsset);
+          pools.add(pool);
+          events.push({ type: "fee", time: g.time, asset: pool, qty: new Decimal(pair.feeQty), ref: `${g.key}:pairfee` });
+        }
+        break;
+      }
+      // wrap, fee_only, fiat_transfer: 수수료 외 과세 없음
       // unknown, defi_unsupported: 해석하지 못해 계산에서 제외 (unresolved로 표시됨)
       default:
         break;

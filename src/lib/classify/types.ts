@@ -65,4 +65,7 @@ export interface Classification {
   rule: string; // "R4" 등, 왜 이렇게 분류했는지
   reason: string; // 사용자에게 보여 줄 설명
   decision?: Decision;
+  // R11: 거래 번호 없이 수량·시각으로 짝지은 내 계정 간 이체의 상대 그룹.
+  // 보낸 수량보다 받은 수량이 적고 수수료 기록이 따로 없으면, 그 차이를 이체 수수료로 본다 (보내는 쪽에만 기록).
+  pair?: { key: string; feeAsset?: string; feeQty?: string };
 }
