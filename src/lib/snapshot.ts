@@ -65,7 +65,7 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           balances = await fetchXapiBalances(s, (message) => errors.push({ sourceLabel: s.label, message }));
         } else if (s.kind === "btc") {
           balances = await fetchBtcBalances(s);
-        } else if (s.kind === "csv") {
+        } else if (s.kind === "csv" || s.kind === "manual") {
           balances = await ledgerBalances(s.id, s.label);
         } else if (s.kind === "tron") {
           balances = await fetchTronBalances(s);

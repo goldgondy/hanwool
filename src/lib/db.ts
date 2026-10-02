@@ -3,7 +3,7 @@ import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "csv";
+export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "csv" | "manual";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -96,7 +96,15 @@ export interface SolanaSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | CsvSource;
+// 직접 입력한 거래 (연결할 수 없는 거래소·오래된 거래·2026년 말 보유분). lib/manual.ts
+export interface ManualSource {
+  id: string;
+  kind: "manual";
+  label: string;
+  createdAt: number;
+}
+
+export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | ManualSource;
 export type ExchangeSource = BinanceSource | OkxSource | XapiSource;
 export const isExchangeKind = (kind: SourceKind) => kind === "binance" || kind === "okx" || kind === "xapi";
 

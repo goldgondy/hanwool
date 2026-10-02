@@ -2,9 +2,11 @@
 
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type Source } from "@/lib/db";
+import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type LedgerEntry, type Source } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
 import { parseUpbitPaste, upbitHistory } from "@/lib/importers/upbit";
+import { buildManualEntries, MANUAL_TYPES, validateManual, type ManualInput, type ManualType } from "@/lib/manual";
+import { formatDateTime } from "@/lib/format";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
@@ -124,7 +126,7 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "CSV" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "CSV", manual: "직접 입력" } as const;
 
 function SolanaForm() {
   const [label, setLabel] = useState("솔라나 지갑");
@@ -314,6 +316,118 @@ function XapiForm() {
       <button className={button} disabled={!unlocked}>
         추가
       </button>
+    </form>
+  );
+}
+
+// ── 직접 입력 ── (lib/manual.ts)
+const EMPTY_MANUAL = { type: "buy" as ManualType, when: "", place: "", coin: "", qty: "", krw: "", coin2: "", qty2: "", fee: "", feeAsset: "", memo: "" };
+
+function ManualEntryCard() {
+  const manualSources = useLiveQuery(() => db.sources.where("kind").equals("manual").toArray(), []);
+  const ids = (manualSources ?? []).map((s) => s.id);
+  const entries = useLiveQuery(() => (ids.length ? db.ledger.where("sourceId").anyOf(ids).toArray() : []), [ids.join(",")]);
+  const [f, setF] = useState(EMPTY_MANUAL);
+  const [error, setError] = useState<string | null>(null);
+  const set = (k: keyof typeof EMPTY_MANUAL) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+
+  // 입력 묶음(groupId)별로 한 줄씩 보여 준다
+  const groups = new Map<string, LedgerEntry[]>();
+  for (const e of entries ?? []) groups.set(e.groupId, [...(groups.get(e.groupId) ?? []), e]);
+  const rows = [...groups.entries()].sort((a, b) => b[1][0].time - a[1][0].time);
+
+  async function onAdd(e: FormEvent) {
+    e.preventDefault();
+    const input: ManualInput = {
+      type: f.type,
+      time: f.when ? Date.parse(`${f.when}:00+09:00`) : NaN,
+      place: f.place,
+      coin: f.coin,
+      qty: f.qty,
+      krw: f.krw || undefined,
+      coin2: f.coin2 || undefined,
+      qty2: f.qty2 || undefined,
+      fee: f.fee || undefined,
+      feeAsset: f.feeAsset || undefined,
+      memo: f.memo || undefined,
+    };
+    const problem = validateManual(input);
+    setError(problem);
+    if (problem) return;
+    let source = manualSources?.[0];
+    if (!source) {
+      source = { id: crypto.randomUUID(), kind: "manual", label: "직접 입력", createdAt: Date.now() };
+      await db.sources.add(source);
+    }
+    await db.ledger.bulkPut(buildManualEntries(source.id, crypto.randomUUID(), input));
+    setF({ ...EMPTY_MANUAL, type: f.type, place: f.place });
+  }
+
+  const t = f.type;
+  return (
+    <form onSubmit={onAdd} className={card}>
+      <h3 className="font-semibold">직접 입력</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        연결할 수 없는 거래소·지갑의 거래나 오래된 거래, 2026년 말에 가지고 있던 코인(의제취득가 대상)을 손으로 넣습니다. 시각은 한국 시각입니다.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <select className={input} value={t} onChange={set("type")}>
+          {(Object.keys(MANUAL_TYPES) as ManualType[]).map((k) => (
+            <option key={k} value={k}>
+              {MANUAL_TYPES[k]}
+            </option>
+          ))}
+        </select>
+        {t === "holding" ? (
+          <span className="self-center text-xs text-stone-500">2026-12-31 23:59 기준</span>
+        ) : (
+          <input className={input} type="datetime-local" step={1} value={f.when} onChange={set("when")} />
+        )}
+        <input className={input} value={f.place} onChange={set("place")} placeholder="거래소·지갑 이름 (예: 코인원)" />
+        <input className={input} value={f.coin} onChange={set("coin")} placeholder={t === "swap" ? "보낸 코인 (예: USDT)" : "코인 (예: BTC)"} />
+        <input className={input} value={f.qty} onChange={set("qty")} placeholder={t === "swap" ? "보낸 수량" : "수량"} inputMode="decimal" />
+        {(t === "buy" || t === "sell" || t === "holding") && (
+          <input
+            className={input}
+            value={f.krw}
+            onChange={set("krw")}
+            inputMode="numeric"
+            placeholder={t === "holding" ? "실제 취득가 원화 합계 (모르면 비움)" : t === "buy" ? "지불한 원화 금액" : "받은 원화 금액"}
+          />
+        )}
+        {t === "swap" && (
+          <>
+            <input className={input} value={f.coin2} onChange={set("coin2")} placeholder="받은 코인 (예: BTC)" />
+            <input className={input} value={f.qty2} onChange={set("qty2")} placeholder="받은 수량" inputMode="decimal" />
+          </>
+        )}
+        <input className={input} value={f.fee} onChange={set("fee")} placeholder="수수료 (선택)" inputMode="decimal" />
+        <input className={input} value={f.feeAsset} onChange={set("feeAsset")} placeholder={t === "buy" || t === "sell" ? "수수료 단위 (기본 KRW)" : "수수료 단위 (기본: 코인)"} />
+        <input className={`${input} col-span-2`} value={f.memo} onChange={set("memo")} placeholder="메모 (선택)" />
+      </div>
+      {t === "holding" && (
+        <p className="text-xs text-stone-500">
+          실제 취득가를 모르면 비워 두세요. 2026년 말 시가로 계산되어 의제취득가와 같아집니다. 실제로 더 비싸게 샀다면 그 금액을 넣어야 세금이 줄어듭니다.
+        </p>
+      )}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <button className={button}>추가</button>
+
+      {rows.length > 0 && (
+        <ul className="divide-y divide-stone-200 text-xs dark:divide-stone-800">
+          {rows.map(([groupId, legs]) => (
+            <li key={groupId} className="flex items-center gap-2 py-1.5">
+              <span className="text-stone-500">{formatDateTime(legs[0].time)}</span>
+              <span className="flex-1">
+                {legs[0].rawType?.replace("직접 입력: ", "")} · {legs.filter((l) => l.kind !== "fee").map((l) => `${l.amount} ${l.asset}`).join(" / ")} · {legs[0].location}
+              </span>
+              <button type="button" className="text-red-600 hover:underline" onClick={() => db.ledger.where("groupId").equals(groupId).delete()}>
+                삭제
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </form>
   );
 }
@@ -919,7 +1033,9 @@ export default function SourcesPage() {
                         ? `${API_EXCHANGES[s.exchange].name} · ${mask(s.apiKey)}`
                         : s.kind === "tron" || s.kind === "solana"
                           ? `${s.address.slice(0, 6)}…${s.address.slice(-4)}`
-                          : mask(s.apiKey)}
+                          : s.kind === "manual"
+                            ? "아래 직접 입력 칸에서 관리"
+                            : mask(s.apiKey)}
               </code>
               {s.kind === "csv" && <CsvLink source={s} all={sources ?? []} />}
               {s.kind === "btc" && <ForgetXpub source={s} />}
@@ -940,6 +1056,7 @@ export default function SourcesPage() {
         <TronForm />
         <SolanaForm />
         <CsvImportCard />
+        <ManualEntryCard />
         <BinanceForm />
         <OkxForm />
         <XapiForm />

@@ -67,7 +67,7 @@
 | R8 | 알려진 브릿지 컨트랙트로 출금 + 다른 체인 내 계정에 비슷한 금액 입금 (시간 창 이내) | `wrap` | suggested |
 | R9 | 한 그룹에서 서로 다른 자산이 나가고 들어옴 | `trade` | suggested (DEX 스왑) |
 | R10 | 토큰 컨트랙트가 직접 보낸 입금, 시세 없음, 또는 알려진 스팸 목록 | `spam` | suggested |
-| R11 | 거래소 출금 ↔ 지갑 입금이 해시 없이 금액·시간만 일치 | `internal_transfer` | suggested |
+| R11 | 서로 다른 내 계정의 외부 출금(R13) ↔ 외부 입금(R12)이 거래 번호 없이 같은 코인·수량(차이 5% 이내)·시각(입금이 출금 10분 전~12시간 뒤)으로 맞음. 받은 수량이 적으면 차이를 이체 수수료로 본다 | `internal_transfer` | suggested |
 | R12 | 나머지 입금 | `external_in` | needs_review (취득가 입력) |
 | R13 | 나머지 출금 | `external_out` | needs_review |
 

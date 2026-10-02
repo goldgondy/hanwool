@@ -3,7 +3,7 @@ import type { LedgerEntry } from "@/lib/db";
 import type { Classification, Decision } from "./types";
 
 // 원장 + 사용자 결정 → 그룹별 분류. 규칙 번호는 docs/classification.md §5와 같다.
-// 브릿지(R8), 해시 없는 매칭(R11)은 해당 데이터가 생기면 추가한다.
+// 브릿지(R8)는 해당 데이터가 생기면 추가한다. 해시 없는 매칭(R11)은 아래 matchUnhashedTransfers.
 
 const isFiatKey = (assetKey: string) => assetKey.startsWith("fiat:");
 
@@ -71,8 +71,8 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
     return { ...base, category: "fee_only", status: "confirmed", rule: "R6", reason: "수수료만 지불한 거래 (approve, 실패, UTXO 통합 등)" };
   }
 
-  // R1–R3: 거래소가 남긴 체결·보상 기록은 추정이 아니므로 확정한다.
-  if (entries.every((e) => e.origin === "exchange")) {
+  // R1–R3: 거래소가 남긴 체결·보상 기록과 사용자가 직접 입력한 거래는 추정이 아니므로 확정한다.
+  if (entries.every((e) => e.origin === "exchange" || e.origin === "manual")) {
     if (legs.some((e) => e.tag === "airdrop")) {
       return { ...base, category: "airdrop", status: "confirmed", rule: "R3", reason: "거래소 에어드랍 기록" };
     }
