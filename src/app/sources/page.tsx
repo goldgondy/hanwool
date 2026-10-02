@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type Source } from "@/lib/db";
 import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
+import { parseUpbitPaste, upbitHistory } from "@/lib/importers/upbit";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
 import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
@@ -336,11 +337,30 @@ function CsvImportCard() {
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function onFile(file: File | undefined) {
+  const [paste, setPaste] = useState("");
+
+  function reset() {
     setPreview(null);
     setUnknownHeaders(null);
     setDone(null);
     setError(null);
+  }
+
+  // 미리보기용 변환 (sourceId는 저장할 때 확정)
+  function showPreview(fileName: string, adapter: CsvAdapter, table: CsvTable, extraWarning?: string) {
+    const result = adapter.convert(table, "preview");
+    if (extraWarning) result.warnings.unshift(extraWarning);
+    setPreview({ fileName, adapter, table, result });
+    const same = (csvSources ?? []).find((s) => s.exchange === adapter.exchange);
+    setTarget(same ? same.id : "new");
+    setLabel(`${adapter.exchangeName} (${adapter.id.includes("paste") ? "붙여넣기" : "CSV"})`);
+    // 기존 연결을 유지하고, 없으면 같은 거래소의 첫 API 연결을 기본값으로 제안한다
+    const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === adapter.exchange);
+    setLink(same?.linkedSourceId ?? api?.id ?? "");
+  }
+
+  async function onFile(file: File | undefined) {
+    reset();
     if (!file) return;
     const text = await file.text();
     const found = detect(text);
@@ -348,15 +368,22 @@ function CsvImportCard() {
       setUnknownHeaders(found.headers);
       return;
     }
-    // 미리보기용 변환 (sourceId는 저장할 때 확정)
-    const result = found.adapter.convert(found.table, "preview");
-    setPreview({ fileName: file.name, adapter: found.adapter, table: found.table, result });
-    const same = (csvSources ?? []).find((s) => s.exchange === found.adapter.exchange);
-    setTarget(same ? same.id : "new");
-    setLabel(`${found.adapter.exchangeName} (CSV)`);
-    // 기존 연결을 유지하고, 없으면 같은 거래소의 첫 API 연결을 기본값으로 제안한다
-    const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === found.adapter.exchange);
-    setLink(same?.linkedSourceId ?? api?.id ?? "");
+    showPreview(file.name, found.adapter, found.table);
+  }
+
+  function onPaste() {
+    reset();
+    const parsed = parseUpbitPaste(paste);
+    if (!parsed) {
+      setError("거래 기록을 찾지 못했습니다. 업비트 투자내역 → 거래내역 표를 날짜·종류가 보이게 복사했는지 확인하세요.");
+      return;
+    }
+    showPreview(
+      `업비트 붙여넣기 ${new Date().toLocaleString("ko-KR")}`,
+      upbitHistory,
+      parsed.table,
+      parsed.skipped ? `기록으로 읽지 못한 조각 ${parsed.skipped}개는 건너뛰었습니다.` : undefined,
+    );
   }
 
   async function onImport() {
@@ -400,6 +427,22 @@ function CsvImportCard() {
         않습니다. 지원: {ADAPTERS.map((a) => a.exchangeName).join(", ")} · 준비 중: {PLANNED_EXCHANGES.join(", ")}
       </p>
       <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm" />
+
+      <details className="text-sm">
+        <summary className="cursor-pointer font-medium">업비트 거래내역 붙여넣기 (파일 내보내기가 없는 업비트용)</summary>
+        <div className="mt-2 space-y-2">
+          <p className="text-xs leading-5 text-stone-500">{upbitHistory.howToExport}. 붙여넣은 글자는 이 브라우저 안에서만 읽습니다.</p>
+          <textarea
+            className={`${input} h-32 font-mono text-xs`}
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            placeholder={"예)\n2027.01.02 09:00:05\tBTC\tKRW\t매수\t0.01 BTC\t100,000,000 KRW\t1,000,000 KRW\t500 KRW\t1,000,500 KRW\t2027.01.02 09:00:00"}
+          />
+          <button type="button" className={button} disabled={!paste.trim()} onClick={onPaste}>
+            읽기
+          </button>
+        </div>
+      </details>
 
       {preview && r && (
         <div className="space-y-2 rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-900">
