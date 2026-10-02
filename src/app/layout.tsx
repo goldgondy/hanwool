@@ -48,6 +48,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/plan" className="text-stone-500 hover:text-foreground">
               절세 도구
             </Link>
+            <Link href="/foreign" className="text-stone-500 hover:text-foreground">
+              해외계좌 신고
+            </Link>
             <Link href="/sources" className="text-stone-500 hover:text-foreground">
               연결 계정
             </Link>

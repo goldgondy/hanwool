@@ -14,7 +14,7 @@ export interface Report {
   priceCount: number;
 }
 
-async function fetchPrices(queries: { symbol: string; time: number }[], onProgress: (m: string) => void) {
+export async function fetchPrices(queries: { symbol: string; time: number }[], onProgress: (m: string) => void) {
   const out = new Map<string, Decimal | null>();
   for (let i = 0; i < queries.length; i += 500) {
     const chunk = queries.slice(i, i + 500);
