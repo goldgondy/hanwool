@@ -154,3 +154,94 @@ export const okxHistory: CsvAdapter = {
     return { entries, warnings, unknownTypes: [...unknown], range: entries.length ? { from, to } : null, rowCount: table.rows.length };
   },
 };
+
+// ── 입금·출금 내역 파일 ──
+// OKX → 자산 → 입금/출금 내역 → 다운로드. 첫 줄 "UID · Account type · Time: 07/10/2026 09:46"(내려받은 시각), 빈 줄, 열 이름.
+// 출금 열: Time · Crypto · Withdrawal address · Network · Transaction ID · Amount · Fee · Status · Reference no.
+// 2026-10-02 세무사 제공 출금 캡처로 확인: Amount는 수수료를 뺀 보낸 금액이다
+//   (05/11 출금 0.050525 + 수수료 0.000015 = 거래 계정 파일의 Transfer out 0.05054).
+// 입금 파일은 아직 샘플이 없어 "Deposit" 이 들어간 열 이름으로 입금 파일이라고 판단한다.
+// 시각: 파일에 시간대가 적혀 있지 않으면 계정 내역 파일과 같은 OKX 기본값(UTC+8)으로 본다.
+
+const header = (headers: string[], re: RegExp) => headers.find((h) => re.test(h));
+const DONE = /sent|complete|success|succeeded|credited|arrived|confirmed|finished|done/i;
+
+// "05/11/2026 21:37:10" (월/일/연) 또는 "2026-05-11 21:37:10" → 밀리초
+export function parseOkxTime(s: string, offsetMin: number): number {
+  const us = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (us) {
+    const [, mo, d, y, h, mi, se] = us;
+    return Date.UTC(+y, +mo - 1, +d, +h, +mi, +(se ?? 0)) - offsetMin * 60_000;
+  }
+  return parseLocal(s, offsetMin);
+}
+
+export const okxTransfers: CsvAdapter = {
+  id: "okx-deposit-withdrawal-v1",
+  exchange: "okx",
+  exchangeName: "OKX",
+  formatName: "입금·출금 내역",
+  howToExport: "OKX 웹 → 자산(Assets) → 입금 내역·출금 내역(Deposit/Withdrawal history) → 다운로드. 입금과 출금을 각각 받아 둘 다 올리세요.",
+  verified: false,
+
+  detect: (h) => ["Time", "Crypto", "Network", "Amount", "Status"].every((c) => h.includes(c)),
+
+  convert(table, sourceId): ImportResult {
+    const entries: LedgerEntry[] = [];
+    const warnings: string[] = [];
+    const seen = new Map<string, number>();
+    let from = Infinity;
+    let to = -Infinity;
+    let bad = 0;
+    const skipped = new Map<string, number>();
+
+    const h = table.headers;
+    const out = !!header(h, /withdraw/i) || (!header(h, /deposit/i) && /withdraw/i.test((table.preamble ?? []).join(" ")));
+    const addrCol = header(h, /address|^to$|^from$/i);
+    const txCol = header(h, /transaction|tx\s*id|txid|hash/i);
+    const offset = okxOffsetMinutes(table.preamble);
+    if (offset === null) warnings.push("파일에 시간대가 없어 OKX 기본값(UTC+8)으로 읽었습니다. 블록체인 거래 번호로 짝을 찾으므로 몇 시간 차이는 계산에 영향이 없습니다.");
+    const off = offset ?? 480;
+
+    for (const row of table.rows) {
+      const status = (row["Status"] ?? "").trim();
+      if (!DONE.test(status)) {
+        skipped.set(status || "(빈 칸)", (skipped.get(status || "(빈 칸)") ?? 0) + 1);
+        continue;
+      }
+      const time = parseOkxTime(row["Time"] ?? "", off);
+      const coin = (row["Crypto"] ?? "").trim().toUpperCase();
+      const amount = num(row["Amount"]);
+      if (Number.isNaN(time) || !coin || !amount || amount.isZero()) {
+        bad++;
+        continue;
+      }
+      from = Math.min(from, time);
+      to = Math.max(to, time);
+      const txHash = txCol ? (row[txCol] ?? "").trim() || undefined : undefined;
+      const address = addrCol ? (row[addrCol] ?? "").trim() || undefined : undefined;
+      const network = (row["Network"] ?? "").trim();
+      const fee = num(row["Fee"])?.abs() ?? null;
+      // 같은 기록인지는 내용으로 판단한다 (Reference no.는 엑셀이 "4E+08"로 줄이므로 쓰지 않음)
+      const key = rowKey([out ? "out" : "in", coin, network, address ?? "", txHash ?? "", sig(amount.abs()), sig(fee), txHash ? "" : String(Math.floor(time / 60_000))], seen);
+      const id = `${sourceId}:file:${key}`;
+      const groupId = `okx:file:${out ? "wd" : "dep"}:${key}`;
+      const base = { sourceId, origin: "exchange" as const, location: "OKX 펀딩 계정", time, asset: coin, assetKey: coin, groupId, txHash, counterparty: address };
+      if (out) {
+        entries.push({ ...base, id: `${id}:out`, amount: amount.abs().neg().toString(), kind: "transfer", rawType: `Withdrawal (${network})` });
+        if (fee && !fee.isZero()) entries.push({ ...base, id: `${id}:fee`, amount: fee.neg().toString(), kind: "fee", rawType: "Withdrawal fee" });
+      } else {
+        entries.push({ ...base, id: `${id}:in`, amount: amount.abs().toString(), kind: "transfer", rawType: `Deposit (${network})` });
+      }
+    }
+
+    if (bad) warnings.push(`${bad}줄은 시각·코인·수량을 읽지 못해 건너뛰었습니다.`);
+    if (skipped.size) warnings.push(`완료되지 않은 기록은 뺐습니다: ${[...skipped].map(([s, n]) => `${s} ${n}건`).join(", ")}.`);
+    warnings.push(
+      out
+        ? "출금 내역입니다. 입금 내역 파일도 함께 올려야 OKX로 들어온 코인의 출처가 이어집니다."
+        : "입금 내역입니다. 출금 내역 파일도 함께 올리세요.",
+    );
+    return { entries, warnings, unknownTypes: [], range: entries.length ? { from, to } : null, rowCount: table.rows.length };
+  },
+};

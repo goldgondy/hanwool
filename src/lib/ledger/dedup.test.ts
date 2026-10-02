@@ -70,6 +70,21 @@ describe("applyCsvCoverage: 거래소 안 일부 계정만 담긴 CSV", () => {
   });
 });
 
+describe("applyCsvCoverage: 출금 내역 파일만 올린 경우", () => {
+  it("API 출금(과 그 수수료)만 빼고 같은 기간 API 입금은 남긴다", () => {
+    const f = (x: LedgerEntry, p: Partial<LedgerEntry>) => ({ ...x, location: "OKX 펀딩 계정", ...p });
+    const list = [
+      f(e("csv", "2025-01-01"), { kind: "transfer", amount: "-1", rawType: "Withdrawal (Bitcoin)" }),
+      f(e("csv", "2025-06-30"), { kind: "transfer", amount: "-1", rawType: "Withdrawal (Bitcoin)" }),
+      f(e("api", "2025-03-15", "api-wd"), { kind: "transfer", amount: "-1", rawType: "Withdrawal" }),
+      f(e("api", "2025-03-15", "api-wd-fee"), { kind: "fee", amount: "-0.1", rawType: "Withdrawal fee" }),
+      f(e("api", "2025-03-15", "api-dep"), { kind: "transfer", amount: "5", rawType: "Deposit" }),
+    ];
+    const r = applyCsvCoverage(list, [api, csv("api")]);
+    expect(r.entries.filter((x) => x.sourceId === "api").map((x) => x.id)).toEqual(["api-dep"]);
+  });
+});
+
 describe("csvSourcesShadowedByApi", () => {
   it("연결된 API 계정이 있는 CSV 계정만 잔고 합산에서 뺀다", () => {
     expect(csvSourcesShadowedByApi([api, csv("api")])).toEqual(new Set(["csv"]));
