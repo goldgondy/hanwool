@@ -5,66 +5,10 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import Decimal from "@/lib/decimal";
 import { db } from "@/lib/db";
-import { loadClassifiedGroups } from "@/lib/classify/load";
 import { ignoredDiffs } from "@/lib/reconcile/run";
 import { CATEGORY_LABEL } from "@/lib/classify/types";
 import { formatAmount, formatDateTime, formatKrw } from "@/lib/format";
-import { buildTaxEvents, DEEMED_PRICE_TIME, poolOf, priceKey, priceQueries, type BuildEventsResult } from "@/lib/tax/build-events";
-import { DEFAULT_POLICY, runEngine, type EngineResult } from "@/lib/tax/engine";
-
-type Mode = "actual" | "simulate";
-
-interface Report {
-  mode: Mode;
-  engine: EngineResult;
-  built: BuildEventsResult;
-  priceCount: number;
-}
-
-async function fetchPrices(queries: { symbol: string; time: number }[], onProgress: (m: string) => void) {
-  const out = new Map<string, Decimal | null>();
-  for (let i = 0; i < queries.length; i += 500) {
-    const chunk = queries.slice(i, i + 500);
-    onProgress(`원화 시세 조회 중 (${Math.min(i + 500, queries.length)}/${queries.length})`);
-    const res = await fetch("/api/prices/at", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ queries: chunk }),
-    });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error ?? `시세 조회 실패 (HTTP ${res.status})`);
-    (body.results as { krw: string | null }[]).forEach((r, j) =>
-      out.set(priceKey(chunk[j].symbol, chunk[j].time), r.krw ? new Decimal(r.krw) : null),
-    );
-  }
-  return out;
-}
-
-async function calculate(mode: Mode, onProgress: (m: string) => void): Promise<Report> {
-  onProgress("분류 불러오는 중");
-  const groups = await loadClassifiedGroups();
-
-  const queries = priceQueries(groups);
-  if (mode === "actual") {
-    // 의제취득가용 2026년 말 시세
-    const pools = new Set(groups.flatMap((g) => (g.classification.category === "spam" ? [] : g.entries.map((e) => poolOf(e.asset)))));
-    for (const p of pools) queries.push({ symbol: p, time: DEEMED_PRICE_TIME });
-  }
-  const prices = await fetchPrices(queries, onProgress);
-
-  onProgress("계산 중");
-  const built = buildTaxEvents(groups, prices);
-  const prices2026: Record<string, Decimal | undefined> = {};
-  for (const p of built.pools) prices2026[p] = prices.get(priceKey(p, DEEMED_PRICE_TIME)) ?? undefined;
-
-  const engine = runEngine(
-    built.events,
-    prices2026,
-    DEFAULT_POLICY,
-    mode === "simulate" ? { taxStart: 0, applyDeemed: false } : {},
-  );
-  return { mode, engine, built, priceCount: queries.length };
-}
+import { calculate, type Mode, type Report } from "@/lib/tax/calculate";
 
 // 금액을 누르면 숫자만(쉼표 없이) 복사된다. 홈택스 입력칸에 그대로 붙여넣을 수 있다.
 function Row({ label, value, strong, copy }: { label: string; value: string; strong?: boolean; copy?: string }) {

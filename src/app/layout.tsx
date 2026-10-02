@@ -45,6 +45,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/tax" className="text-stone-500 hover:text-foreground">
               세금 계산
             </Link>
+            <Link href="/plan" className="text-stone-500 hover:text-foreground">
+              절세 도구
+            </Link>
             <Link href="/sources" className="text-stone-500 hover:text-foreground">
               연결 계정
             </Link>
