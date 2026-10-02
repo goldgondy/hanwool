@@ -13,8 +13,6 @@ import type { CsvAdapter, ImportResult } from "./types";
 //   Transfer in/out = 같은 OKX 안의 자금 계정 ↔ 거래 계정 이동 (API 연결과 같게 원장에서 뺀다)
 // 입금·출금은 자금 계정(Funding) 내역에 있다. 그 파일 형식은 아직 샘플이 없어 같은 열이라고 가정한다.
 
-export const OKX_COLUMNS = ["id", "Order id", "Time", "Trade Type", "Symbol", "Action", "Fee", "Fee Unit", "Balance Change", "Balance Unit"];
-
 const TRADE = /^(spot|margin|convert|easy convert|small assets? convert|dust)/;
 const INTERNAL = /^transfer$/;
 const DERIVATIVE = /futures|perpetual|swap|option|delivery|funding fee|liquidation|adl|settlement|expiry/;
@@ -32,6 +30,8 @@ function num(s: string | undefined): Decimal | null {
     return null;
   }
 }
+
+const sig = (d: Decimal | null) => (d ? d.toSignificantDigits(6).toString() : "");
 
 // 첫 줄의 "Time Zone:UTC+8" → 분 단위 시차. 없으면 null (OKX 기본값 UTC+8로 본다)
 export function okxOffsetMinutes(preamble: string[] | undefined): number | null {
@@ -94,13 +94,16 @@ export const okxHistory: CsvAdapter = {
       }
       from = Math.min(from, time);
       to = Math.max(to, time);
+      const fee = num(row["Fee"]);
+      const feeUnit = (row["Fee Unit"] ?? "").trim().toUpperCase() || coin;
 
-      const key = rowKey(OKX_COLUMNS.map((c) => row[c] ?? ""), seen);
+      // 같은 기록인지는 내용으로만 판단한다: 시각(분 단위)·종류·코인·잔고 변동·수수료(유효숫자 6자리).
+      // 주문번호·행 번호는 빼서, 원본 CSV와 엑셀에서 다시 저장한 파일(초·자릿수가 잘림)을 섞어 올려도 같은 기록으로 알아본다.
+      // 같은 파일 안에서 내용이 똑같은 기록이 여러 개면 rowKey가 순번을 붙여 구분한다.
+      const key = rowKey([String(Math.floor(time / 60_000)), type, action.toLowerCase(), coin, sig(change), sig(fee), feeUnit], seen);
       const id = `${sourceId}:file:${key}`;
       const rawType = action ? `${typeRaw} ${action}` : typeRaw;
       const base = { sourceId, origin: "exchange" as const, location, time, asset: coin, assetKey: coin, rawType };
-      const fee = num(row["Fee"]);
-      const feeUnit = (row["Fee Unit"] ?? "").trim().toUpperCase() || coin;
 
       if (TRADE.test(type)) {
         // 같은 주문의 체결(코인 +, 대금 −)을 한 거래로 묶는다. 엑셀이 주문번호를 "3.56E+18"로 줄였으면 시각으로 묶는다.
@@ -148,9 +151,6 @@ export const okxHistory: CsvAdapter = {
       );
     }
     if (derivatives) warnings.push(`선물·파생상품 기록 ${derivatives}건은 과세 여부 검토가 필요해 미분류로 두고 세금 계산에서 제외했습니다.`);
-    if (/E\+/i.test(table.rows.map((r) => r["Order id"] ?? "").join(" "))) {
-      warnings.push("엑셀에서 다시 저장한 파일이라 주문번호·소수점 일부가 잘렸을 수 있습니다. 가능하면 OKX에서 받은 원본 CSV를 올리세요.");
-    }
     return { entries, warnings, unknownTypes: [...unknown], range: entries.length ? { from, to } : null, rowCount: table.rows.length };
   },
 };

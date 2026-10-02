@@ -51,12 +51,22 @@ describe("OKX 계정 내역 파일", () => {
     expect(r.warnings.join(" ")).toContain("이동 2건");
   });
 
-  it("엑셀이 주문번호를 3.56E+18로 줄인 파일은 시각으로 묶고 경고한다", () => {
+  it("엑셀이 주문번호를 3.56E+18로 줄인 파일은 시각으로 묶는다", () => {
     const found = detect(sample("3.56E+18"));
     if (!found.adapter) throw new Error("not detected");
     const r = okxHistory.convert(found.table, "s");
     expect(new Set(r.entries.map((e) => e.groupId)).size).toBe(1);
-    expect(r.warnings.join(" ")).toContain("원본 CSV");
+  });
+
+  it("원본과 엑셀에서 다시 저장한 파일(주문번호·초 잘림)을 같은 기록으로 알아본다 → 두 번 올려도 중복되지 않음", () => {
+    const resaved = sample("3.56E+18")
+      .replace(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}):\d{2}/g, "$1") // 초 잘림
+      .replace(/^\d+,/gm, "9,"); // 행 번호도 다르게
+    const a = detect(sample());
+    const b = detect(resaved);
+    if (!a.adapter || !b.adapter) throw new Error("not detected");
+    const ids = (t: typeof a) => (t.adapter ? t.adapter.convert(t.table, "s").entries.map((e) => e.id).sort() : []);
+    expect(ids(b)).toEqual(ids(a));
   });
 
   it("자금 계정 파일의 입금·출금 (형식 추정)", () => {
