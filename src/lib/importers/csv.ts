@@ -6,16 +6,35 @@ import type { CsvTable } from "./types";
 export function parseCsv(text: string, isHeader: (cells: string[]) => boolean = () => true): CsvTable | null {
   const clean = text.replace(/^﻿/, ""); // BOM 제거
   const { data } = Papa.parse<string[]>(clean, { skipEmptyLines: "greedy" });
-  const headerIndex = data.slice(0, 20).findIndex((cells) => isHeader(cells.map((c) => c.trim())));
+  return tableFromRows(data, isHeader);
+}
+
+// 칸 배열(CSV·엑셀 시트) → 표. 엑셀 파일도 같은 방식으로 열 이름 줄을 찾는다 (lib/importers/xlsx.ts).
+export function tableFromRows(data: string[][], isHeader: (cells: string[]) => boolean = () => true): CsvTable | null {
+  const headerIndex = data.slice(0, 20).findIndex((cells) => isHeader(cells.map((c) => (c ?? "").trim())));
   if (headerIndex < 0) return null;
 
-  const headers = data[headerIndex].map((h) => h.trim());
-  const rows = data.slice(headerIndex + 1).map((cells) => {
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => (row[h] = (cells[i] ?? "").trim()));
-    return row;
-  });
+  const headers = data[headerIndex].map((h) => (h ?? "").trim());
+  const rows = data
+    .slice(headerIndex + 1)
+    .filter((cells) => cells.some((c) => (c ?? "").trim()))
+    .map((cells) => {
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => (row[h] = (cells[i] ?? "").trim()));
+      return row;
+    });
   return { headers, rows };
+}
+
+// 한국어 윈도우 엑셀이 저장한 CSV는 EUC-KR(CP949)이다. UTF-8로 읽어 글자가 깨지면 EUC-KR로 다시 읽는다.
+export function decodeText(buf: ArrayBuffer): string {
+  const utf8 = new TextDecoder("utf-8").decode(buf);
+  if (!utf8.includes("�")) return utf8;
+  try {
+    return new TextDecoder("euc-kr").decode(buf);
+  } catch {
+    return utf8;
+  }
 }
 
 // 행 내용으로 만드는 결정적 ID용 해시 (같은 파일·겹치는 기간을 다시 올려도 중복되지 않게).

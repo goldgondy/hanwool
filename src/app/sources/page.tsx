@@ -3,7 +3,9 @@
 import { useState, type FormEvent } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, exchangeIdOf, getSetting, isExchangeKind, setSetting, type BtcSource, type CsvSource, type EvmChain, type LedgerEntry, type Source } from "@/lib/db";
-import { ADAPTERS, detect, PLANNED_EXCHANGES } from "@/lib/importers";
+import { ADAPTERS, detect, detectRows, PLANNED_EXCHANGES } from "@/lib/importers";
+import { decodeText } from "@/lib/importers/csv";
+import { isOldXls, isXlsx, readXlsxRows } from "@/lib/importers/xlsx";
 import { parseUpbitPaste, upbitHistory } from "@/lib/importers/upbit";
 import { buildManualEntries, MANUAL_TYPES, validateManual, type ManualInput, type ManualType } from "@/lib/manual";
 import { formatDateTime } from "@/lib/format";
@@ -460,7 +462,7 @@ function CsvImportCard() {
     setPreview({ fileName, adapter, table, result });
     const same = (csvSources ?? []).find((s) => s.exchange === adapter.exchange);
     setTarget(same ? same.id : "new");
-    setLabel(`${adapter.exchangeName} (${adapter.id.includes("paste") ? "붙여넣기" : "CSV"})`);
+    setLabel(`${adapter.exchangeName} (${adapter.id.includes("paste") ? "붙여넣기" : "파일"})`);
     // 기존 연결을 유지하고, 없으면 같은 거래소의 첫 API 연결을 기본값으로 제안한다
     const api = (allSources ?? []).find((s) => isExchangeKind(s.kind) && exchangeIdOf(s) === adapter.exchange);
     setLink(same?.linkedSourceId ?? api?.id ?? "");
@@ -469,8 +471,18 @@ function CsvImportCard() {
   async function onFile(file: File | undefined) {
     reset();
     if (!file) return;
-    const text = await file.text();
-    const found = detect(text);
+    const buf = await file.arrayBuffer();
+    if (isOldXls(buf)) {
+      setError("옛 엑셀 형식(.xls)은 읽을 수 없습니다. 엑셀에서 파일을 열고 ‘다른 이름으로 저장 → Excel 통합 문서(.xlsx)’로 저장해 올리거나, 표 전체를 복사해 아래 ‘붙여넣기’ 칸에 넣으세요.");
+      return;
+    }
+    let found;
+    try {
+      found = isXlsx(buf) ? detectRows(await readXlsxRows(buf)) : detect(decodeText(buf));
+    } catch (e) {
+      setError(`파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
     if (!found.adapter) {
       setUnknownHeaders(found.headers);
       return;
@@ -480,9 +492,15 @@ function CsvImportCard() {
 
   function onPaste() {
     reset();
+    // 엑셀에서 복사한 표(탭으로 나뉜 칸)는 파일과 같은 변환기로 읽는다 (예: 빗썸 엑셀)
+    const asTable = detect(paste);
+    if (asTable.adapter && asTable.adapter !== upbitHistory) {
+      showPreview(`${asTable.adapter.exchangeName} 붙여넣기 ${new Date().toLocaleString("ko-KR")}`, asTable.adapter, asTable.table);
+      return;
+    }
     const parsed = parseUpbitPaste(paste);
     if (!parsed) {
-      setError("거래 기록을 찾지 못했습니다. 업비트 투자내역 → 거래내역 표를 날짜·종류가 보이게 복사했는지 확인하세요.");
+      setError("거래 기록을 찾지 못했습니다. 업비트는 투자내역 → 거래내역 표를, 빗썸은 엑셀의 표를 열 이름 줄까지 포함해 복사했는지 확인하세요.");
       return;
     }
     showPreview(
@@ -528,17 +546,20 @@ function CsvImportCard() {
 
   return (
     <div className={card}>
-      <h3 className="font-semibold">거래소 CSV 가져오기</h3>
+      <h3 className="font-semibold">거래내역 파일 가져오기</h3>
       <p className="text-xs leading-5 text-stone-500">
-        API 키 없이 거래소에서 내려받은 거래내역 파일로 연결합니다. 파일은 이 브라우저 안에서만 읽고 서버로 보내지
+        API 키 없이 거래소에서 내려받은 거래내역 파일(CSV·엑셀)로 연결합니다. 파일은 이 브라우저 안에서만 읽고 서버로 보내지
         않습니다. 지원: {ADAPTERS.map((a) => a.exchangeName).join(", ")} · 준비 중: {PLANNED_EXCHANGES.join(", ")}
       </p>
-      <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm" />
+      <input type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm" />
 
       <details className="text-sm">
-        <summary className="cursor-pointer font-medium">업비트 거래내역 붙여넣기 (파일 내보내기가 없는 업비트용)</summary>
+        <summary className="cursor-pointer font-medium">붙여넣기로 가져오기 (업비트 거래내역 화면, 엑셀에서 복사한 표)</summary>
         <div className="mt-2 space-y-2">
-          <p className="text-xs leading-5 text-stone-500">{upbitHistory.howToExport}. 붙여넣은 글자는 이 브라우저 안에서만 읽습니다.</p>
+          <p className="text-xs leading-5 text-stone-500">
+            업비트: {upbitHistory.howToExport}. 빗썸 등 엑셀 파일이 올라가지 않을 때: 엑셀에서 열 이름 줄부터 표 전체를 선택해 복사(Ctrl+C) →
+            여기에 붙여넣기. 붙여넣은 글자는 이 브라우저 안에서만 읽습니다.
+          </p>
           <textarea
             className={`${input} h-32 font-mono text-xs`}
             value={paste}
