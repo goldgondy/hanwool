@@ -56,6 +56,20 @@ describe("applyCsvCoverage", () => {
   });
 });
 
+describe("applyCsvCoverage: 거래소 안 일부 계정만 담긴 CSV", () => {
+  it("CSV와 위치가 같은 API 항목만 빼고, 다른 계정(자금 계정 입출금)은 남긴다", () => {
+    const at = (x: LedgerEntry, location: string) => ({ ...x, location });
+    const list = [
+      at(e("csv", "2025-01-01"), "OKX 거래 계정"),
+      at(e("csv", "2025-06-30"), "OKX 거래 계정"),
+      at(e("api", "2025-03-15", "api-trade"), "OKX 거래 계정"), // 겹침 → 제거
+      at(e("api", "2025-03-15", "api-deposit"), "OKX 펀딩 계정"), // 파일에 없는 계정 → 유지
+    ];
+    const r = applyCsvCoverage(list, [api, csv("api")]);
+    expect(r.entries.filter((x) => x.sourceId === "api").map((x) => x.id)).toEqual(["api-deposit"]);
+  });
+});
+
 describe("csvSourcesShadowedByApi", () => {
   it("연결된 API 계정이 있는 CSV 계정만 잔고 합산에서 뺀다", () => {
     expect(csvSourcesShadowedByApi([api, csv("api")])).toEqual(new Set(["csv"]));

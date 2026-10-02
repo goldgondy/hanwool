@@ -6,6 +6,7 @@ import type { LedgerEntry } from "@/lib/db";
 export interface CsvTable {
   headers: string[];
   rows: Record<string, string>[];
+  preamble?: string[]; // 열 이름 줄 위의 안내 줄들 (예: OKX "Time Zone:UTC+8")
 }
 
 export interface ImportResult {

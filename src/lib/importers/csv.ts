@@ -23,7 +23,8 @@ export function tableFromRows(data: string[][], isHeader: (cells: string[]) => b
       headers.forEach((h, i) => (row[h] = (cells[i] ?? "").trim()));
       return row;
     });
-  return { headers, rows };
+  const preamble = data.slice(0, headerIndex).map((cells) => cells.map((c) => (c ?? "").trim()).filter(Boolean).join(" ")).filter(Boolean);
+  return { headers, rows, preamble };
 }
 
 // 한국어 윈도우 엑셀이 저장한 CSV는 EUC-KR(CP949)이다. UTF-8로 읽어 글자가 깨지면 EUC-KR로 다시 읽는다.
