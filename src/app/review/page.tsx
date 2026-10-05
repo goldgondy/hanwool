@@ -34,9 +34,11 @@ function txUrl(groupKey: string) {
   const [chain, hash] = groupKey.split(":");
   if (!hash) return undefined;
   if (chain === "btc") return `https://mempool.space/tx/${hash}`;
+  if (chain === "ltc") return `https://litecoinspace.org/tx/${hash}`;
   if (chain === "tron") return `https://tronscan.org/#/transaction/${hash}`;
   if (chain === "sol") return hash === "reward" ? undefined : `https://solscan.io/tx/${hash}`;
   if (chain === "xrp") return `https://xrpscan.com/tx/${hash}`;
+  if (chain === "aptos") return undefined; // 묶음 키는 거래 버전 번호
   if (chain === "ton") return undefined; // TON 묶음 키는 처리 흐름(trace) ID라 거래 링크가 아니다
   const evm = EVM_CHAINS[chain as EvmChain];
   return evm ? `${evm.explorer}/tx/${hash}` : undefined;

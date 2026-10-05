@@ -3,7 +3,7 @@ import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "xrp" | "ton" | "csv" | "manual";
+export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "xrp" | "ton" | "aptos" | "csv" | "manual";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -50,6 +50,7 @@ export interface BtcSource {
   scriptType?: "p2pkh" | "p2sh-p2wpkh" | "p2wpkh" | "p2tr"; // xpub만 입력한 경우 사용자가 고른 주소 형식
   gapLimit: number;
   esploraUrl: string; // mempool.space 또는 개인 노드
+  coin?: "btc" | "ltc"; // 없으면 비트코인 (lib/btc/coins.ts)
   createdAt: number;
 }
 
@@ -116,6 +117,15 @@ export interface TonSource {
   createdAt: number;
 }
 
+// Aptos 지갑 (페트라 등). lib/ledger/aptos-sync.ts
+export interface AptosSource {
+  id: string;
+  kind: "aptos";
+  label: string;
+  address: string; // 0x + 64자리 소문자
+  createdAt: number;
+}
+
 // 직접 입력한 거래 (연결할 수 없는 거래소·오래된 거래·2026년 말 보유분). lib/manual.ts
 export interface ManualSource {
   id: string;
@@ -124,7 +134,7 @@ export interface ManualSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | XrpSource | TonSource | CsvSource | ManualSource;
+export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | XrpSource | TonSource | AptosSource | CsvSource | ManualSource;
 export type ExchangeSource = BinanceSource | OkxSource | XapiSource;
 export const isExchangeKind = (kind: SourceKind) => kind === "binance" || kind === "okx" || kind === "xapi";
 

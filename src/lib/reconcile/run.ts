@@ -10,6 +10,7 @@ import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync
 import { fetchTronBalances, syncTronHistory } from "@/lib/ledger/tron-sync";
 import { fetchXrpBalances, syncXrpHistory } from "@/lib/ledger/xrp-sync";
 import { fetchTonBalances, syncTonHistory } from "@/lib/ledger/ton-sync";
+import { fetchAptosBalances, syncAptosHistory } from "@/lib/ledger/aptos-sync";
 import { HISTORY_SUPPORTED, syncXapiHistory } from "@/lib/ledger/xapi-sync";
 import { reconcile } from "@/lib/ledger/reconcile";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
@@ -42,6 +43,8 @@ async function liveBalances(s: LiveSource): Promise<RawBalance[]> {
       return fetchXrpBalances(s);
     case "ton":
       return fetchTonBalances(s);
+    case "aptos":
+      return fetchAptosBalances(s);
   }
 }
 
@@ -56,6 +59,7 @@ async function syncBeforeReconcile(sources: LiveSource[], onProgress: (msg: stri
       else if (s.kind === "solana") await syncSolanaHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "xrp") await syncXrpHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "ton") await syncTonHistory(s, (m) => onProgress(`${s.label}: ${m}`));
+      else if (s.kind === "aptos") await syncAptosHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "xapi" && HISTORY_SUPPORTED.has(s.exchange) && isUnlocked()) await syncXapiHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "okx" && isUnlocked()) await syncOkxHistory(s, (m) => onProgress(`${s.label}: ${m}`));
       else if (s.kind === "binance" && isUnlocked()) await syncBinanceHistory(s, (m) => onProgress(`${s.label}: ${m}`));

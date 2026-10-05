@@ -3,7 +3,8 @@ import { db, type BtcSource } from "@/lib/db";
 import { parseWalletInput, type ParsedWallet } from "@/lib/btc/descriptor";
 import { Esplora, mapLimit, type EsploraTx } from "@/lib/btc/esplora";
 import { confirmedBalanceSats, scanWallet, type UsedAddress } from "@/lib/btc/scan";
-import { BTC_ASSET_KEY, buildBtcEntries } from "@/lib/ledger/btc-build";
+import { buildBtcEntries } from "@/lib/ledger/btc-build";
+import { coinOf } from "@/lib/btc/coins";
 import type { RawBalance } from "@/lib/sources/types";
 
 export interface BtcSyncResult {
@@ -20,7 +21,7 @@ async function scan(source: BtcSource, onProgress: (msg: string) => void) {
   if (cached && Date.now() - cached.at < 60_000) return cached.used;
   const wallet: ParsedWallet = source.frozenAddresses?.length
     ? { kind: "addresses", addresses: source.frozenAddresses }
-    : parseWalletInput(source.input, source.scriptType);
+    : parseWalletInput(source.input, source.scriptType, source.coin);
   const used = await scanWallet(wallet, new Esplora(source.esploraUrl), source.gapLimit, onProgress);
   scanCache.set(source.id, { at: Date.now(), used });
   return used;
@@ -45,7 +46,7 @@ export async function syncBtcHistory(
   for (const t of perAddress.flat()) byId.set(t.txid, t);
 
   const mine = new Set(used.map((u) => u.address));
-  const { entries, warnings } = buildBtcEntries({ sourceId: source.id, addresses: mine, txs: [...byId.values()] });
+  const { entries, warnings } = buildBtcEntries({ sourceId: source.id, addresses: mine, txs: [...byId.values()], coin: source.coin });
 
   // xpub을 지운 뒤 보낸 거래: 지갑이 새로 만든 거스름돈 주소를 몰라 거스름돈까지 외부 송금으로 잡혔을 수 있다.
   // 잔고 대사도 같은 주소 목록만 보므로 차이로 드러나지 않아 따로 알린다.
@@ -81,12 +82,13 @@ export async function fetchBtcBalances(
 ): Promise<RawBalance[]> {
   const sats = confirmedBalanceSats(await scan(source, onProgress));
   if (sats === BigInt(0)) return [];
+  const c = coinOf(source.coin);
   return [
     {
-      location: "Bitcoin",
-      asset: "BTC",
-      rawAsset: "BTC",
-      assetKey: BTC_ASSET_KEY,
+      location: c.location,
+      asset: c.symbol,
+      rawAsset: c.symbol,
+      assetKey: c.assetKey,
       amount: new Decimal(sats.toString()).div(1e8),
     },
   ];

@@ -18,8 +18,9 @@ import { isTronAddress } from "@/lib/tron/address";
 import { isSolanaAddress } from "@/lib/solana/address";
 import { isXrpAddress } from "@/lib/xrp/address";
 import { toRawTon } from "@/lib/ton/address";
+import { normalizeAptos } from "@/lib/aptos/api";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
-import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
+import { coinOf, type UtxoCoin } from "@/lib/btc/coins";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
 import { encrypt } from "@/lib/vault";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
@@ -131,7 +132,7 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", xrp: "XRP", ton: "TON", csv: "파일", manual: "직접 입력" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", xrp: "XRP", ton: "TON", aptos: "Aptos", csv: "파일", manual: "직접 입력" } as const;
 
 function SolanaForm() {
   const [label, setLabel] = useState("솔라나 지갑");
@@ -225,6 +226,43 @@ function XrpForm() {
       {address && !valid && <p className="text-xs text-red-600">XRP 주소 형식이 아닙니다 (r로 시작, 체크섬 확인). X로 시작하는 주소는 지갑 앱에서 r 주소를 확인해 넣으세요.</p>}
       {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
       <button className={button} disabled={!valid}>
+        추가
+      </button>
+    </form>
+  );
+}
+
+function AptosForm() {
+  const [label, setLabel] = useState("Aptos 지갑");
+  const [address, setAddress] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const addr = normalizeAptos(address);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!addr) return;
+    const existing = (await db.sources.toArray()).find((s) => s.kind === "aptos" && s.address === addr);
+    if (existing) {
+      setNotice(`이미 연결된 주소입니다 (${existing.label}).`);
+      return;
+    }
+    await db.sources.add({ id: crypto.randomUUID(), kind: "aptos", label: label.trim() || "Aptos 지갑", address: addr, createdAt: Date.now() });
+    setNotice(`${label} (${addr.slice(0, 6)}…${addr.slice(-4)})를 연결했습니다.`);
+    setAddress("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">Aptos 지갑 (페트라, 나이트리 등)</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        0x로 시작하는 지갑 주소를 입력하세요. APT와 USDT·USDC 등 토큰 입출금, 가스비를 공개 기록으로 불러옵니다. 거래가 아주 많으면 공개 서버의 호출 한도(5분
+        단위) 때문에 중간에 기다릴 수 있습니다. <b>복구 문구나 개인키는 절대 입력하지 마세요.</b>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
+      <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="0x…" required />
+      {address && !addr && <p className="text-xs text-red-600">Aptos 주소 형식이 아닙니다 (0x + 16진수 최대 64자).</p>}
+      {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
+      <button className={button} disabled={!addr}>
         추가
       </button>
     </form>
@@ -859,12 +897,12 @@ function CsvImportCard() {
   );
 }
 
-function preview(input: string, scriptType: ScriptType | "") {
+function preview(input: string, scriptType: ScriptType | "", coin: UtxoCoin) {
   if (!input.trim()) return null;
   try {
-    const w = parseWalletInput(input, scriptType || undefined);
+    const w = parseWalletInput(input, scriptType || undefined, coin);
     if (w.kind !== "hd") return { ok: true as const, text: "단일 주소", isXpub: false };
-    const isXpub = /^xpub/.test(input.trim());
+    const isXpub = /^(xpub|Ltub)/.test(input.trim());
     return {
       ok: true as const,
       text: `${SCRIPT_LABEL[w.scriptType]} · 첫 받는 주소 ${deriveAddress(w, 0, 0)}`,
@@ -875,20 +913,22 @@ function preview(input: string, scriptType: ScriptType | "") {
   }
 }
 
-function BtcForm() {
-  const [label, setLabel] = useState("비트코인 지갑");
+function BtcForm({ coin = "btc" }: { coin?: UtxoCoin }) {
+  const c = coinOf(coin);
+  const coinName = coin === "ltc" ? "라이트코인" : "비트코인";
+  const [label, setLabel] = useState(`${coinName} 지갑`);
   const [walletInput, setWalletInput] = useState("");
   const [scriptType, setScriptType] = useState<ScriptType | "">("");
-  const [esploraUrl, setEsploraUrl] = useState(DEFAULT_ESPLORA);
+  const [esploraUrl, setEsploraUrl] = useState(c.esplora);
   const [advanced, setAdvanced] = useState(false);
-  const p = preview(walletInput, scriptType);
+  const p = preview(walletInput, scriptType, coin);
 
   const [dupError, setDupError] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!p?.ok) return;
-    const dup = await findDuplicateBtc(walletInput, scriptType);
+    const dup = await findDuplicateBtc(walletInput, scriptType, coin);
     if (dup) {
       setDupError(dup);
       return;
@@ -897,11 +937,12 @@ function BtcForm() {
     await db.sources.add({
       id: crypto.randomUUID(),
       kind: "btc",
-      label: label.trim() || "비트코인 지갑",
+      label: label.trim() || `${coinName} 지갑`,
+      coin: coin === "btc" ? undefined : coin,
       input: walletInput.trim(),
       scriptType: scriptType || undefined,
       gapLimit: DEFAULT_GAP_LIMIT,
-      esploraUrl: esploraUrl.trim() || DEFAULT_ESPLORA,
+      esploraUrl: esploraUrl.trim() || c.esplora,
       createdAt: Date.now(),
     });
     setWalletInput("");
@@ -910,7 +951,7 @@ function BtcForm() {
 
   return (
     <form onSubmit={onSubmit} className={card}>
-      <h3 className="font-semibold">비트코인 지갑</h3>
+      <h3 className="font-semibold">{coinName} 지갑</h3>
       <p className="text-xs leading-5 text-stone-500">
         확장 공개키(<b>zpub·ypub·xpub</b>), 디스크립터, 또는 주소 하나를 입력하세요. Sparrow는 지갑의{" "}
         <i>Settings</i> 탭 → Keystore의 <i>xPub</i> 값을 복사하면 됩니다.
@@ -922,7 +963,7 @@ function BtcForm() {
         rows={3}
         value={walletInput}
         onChange={(e) => setWalletInput(e.target.value)}
-        placeholder="zpub6r… / wpkh([…]xpub…/<0;1>/*) / bc1q…"
+        placeholder={c.addressHint}
         required
       />
       {p && (
@@ -934,7 +975,7 @@ function BtcForm() {
         <label className="flex flex-wrap items-center gap-2 text-xs">
           주소 형식
           <select className={`${input} w-auto`} value={scriptType} onChange={(e) => setScriptType(e.target.value as ScriptType | "")}>
-            <option value="">Legacy (1…) — xpub 기본값</option>
+            <option value="">{coin === "ltc" ? "Legacy (L…) — Ltub·xpub 기본값" : "Legacy (1…) — xpub 기본값"}</option>
             {(Object.keys(SCRIPT_LABEL) as ScriptType[]).map((s) => (
               <option key={s} value={s}>
                 {SCRIPT_LABEL[s]}
@@ -949,7 +990,7 @@ function BtcForm() {
       </button>
       {advanced && (
         <div className="space-y-1">
-          <input className={input} value={esploraUrl} onChange={(e) => setEsploraUrl(e.target.value)} placeholder={DEFAULT_ESPLORA} />
+          <input className={input} value={esploraUrl} onChange={(e) => setEsploraUrl(e.target.value)} placeholder={c.esplora} />
           <p className="text-xs leading-5 text-stone-500">
             기본값은 mempool.space 공개 서버입니다. 조회한 주소들이 한 지갑이라는 사실이 서버에 드러나므로,
             개인 노드(Umbrel·Start9의 mempool 등)가 있다면 그 주소(예: http://umbrel.local:3006/api)를
@@ -967,13 +1008,13 @@ function BtcForm() {
 
 // 같은 지갑을 두 번 연결하면 잔고와 거래가 이중으로 잡히므로 막는다.
 // 입력 형식이 달라도(zpub ↔ 디스크립터) 첫 받는 주소가 같으면 같은 지갑이다.
-async function findDuplicateBtc(raw: string, scriptType: ScriptType | ""): Promise<string | null> {
+async function findDuplicateBtc(raw: string, scriptType: ScriptType | "", coin: UtxoCoin): Promise<string | null> {
   const fingerprint = (input: string, st?: string) => {
-    const w = parseWalletInput(input, (st || undefined) as ScriptType | undefined);
+    const w = parseWalletInput(input, (st || undefined) as ScriptType | undefined, coin);
     return w.kind === "hd" ? deriveAddress(w, 0, 0) : w.kind === "address" ? w.address : w.addresses[0];
   };
   const mine = fingerprint(raw, scriptType);
-  const existing = (await db.sources.toArray()).filter((s) => s.kind === "btc");
+  const existing = (await db.sources.toArray()).filter((s): s is BtcSource => s.kind === "btc" && (s.coin ?? "btc") === coin);
   for (const s of existing) {
     if (s.frozenAddresses?.length) {
       // xpub을 지운 지갑: 남긴 주소로만 비교한다
@@ -1186,7 +1227,7 @@ function ForgetXpub({ source }: { source: BtcSource }) {
   const [confirm, setConfirm] = useState(false);
   let isHd = false;
   try {
-    isHd = !source.frozenAddresses?.length && parseWalletInput(source.input, source.scriptType).kind === "hd";
+    isHd = !source.frozenAddresses?.length && parseWalletInput(source.input, source.scriptType, source.coin).kind === "hd";
   } catch {
     isHd = false;
   }
@@ -1238,7 +1279,7 @@ function sourceDetail(s: Source) {
   if (s.kind === "btc") return `${s.frozenAddresses?.length ? `주소 ${s.frozenAddresses.length}개 (xpub 지움)` : mask(s.input)} · ${new URL(s.esploraUrl).host}`;
   if (s.kind === "csv") return `파일 ${s.imports.length}개 가져옴`;
   if (s.kind === "xapi") return `API 키 ${mask(s.apiKey)}`;
-  if (s.kind === "tron" || s.kind === "solana" || s.kind === "xrp") return `${s.address.slice(0, 6)}…${s.address.slice(-4)}`;
+  if (s.kind === "tron" || s.kind === "solana" || s.kind === "xrp" || s.kind === "aptos") return `${s.address.slice(0, 6)}…${s.address.slice(-4)}`;
   if (s.kind === "ton") return `${(s.display ?? s.address).slice(0, 6)}…${(s.display ?? s.address).slice(-4)}`;
   if (s.kind === "manual") return "‘직접 입력’ 탭에서 관리";
   return `API 키 ${mask(s.apiKey)}`;
@@ -1247,12 +1288,13 @@ function sourceDetail(s: Source) {
 // 계정 종류 이름 (거래소 API는 거래소 이름으로)
 function kindName(s: Source) {
   if (s.kind === "xapi") return API_EXCHANGES[s.exchange].name;
+  if (s.kind === "btc" && s.coin === "ltc") return "Litecoin";
   return KIND_LABEL[s.kind];
 }
 
 const GROUPS: { title: string; kinds: Source["kind"][] }[] = [
   { title: "거래소", kinds: ["binance", "okx", "xapi", "csv"] },
-  { title: "개인 지갑", kinds: ["btc", "evm", "tron", "solana", "xrp", "ton"] },
+  { title: "개인 지갑", kinds: ["btc", "evm", "tron", "solana", "xrp", "ton", "aptos"] },
   { title: "직접 입력", kinds: ["manual"] },
 ];
 
@@ -1325,7 +1367,7 @@ type ExchangeChoice = "binance" | "okx" | ApiExchange;
 const EXCHANGE_ORDER: ExchangeChoice[] = ["upbit", "bithumb", "coinone", "gopax", "binance", "okx", "bybit", "coinbase", "bitget", "gate", "mexc"];
 const exchangeName = (x: ExchangeChoice) => (x === "binance" ? "바이낸스" : x === "okx" ? "OKX" : API_EXCHANGES[x].name);
 
-type WalletChoice = "btc" | "evm" | "tron" | "solana" | "xrp" | "ton";
+type WalletChoice = "btc" | "evm" | "tron" | "solana" | "xrp" | "ton" | "aptos" | "ltc";
 const WALLETS: { key: WalletChoice; name: string; hint: string }[] = [
   { key: "evm", name: "이더리움 계열", hint: "메타마스크·라비 등, 이더리움·아비트럼·베이스·옵티미즘·폴리곤" },
   { key: "btc", name: "비트코인", hint: "zpub·xpub 또는 주소" },
@@ -1333,6 +1375,8 @@ const WALLETS: { key: WalletChoice; name: string; hint: string }[] = [
   { key: "solana", name: "솔라나", hint: "팬텀·솔플레어" },
   { key: "xrp", name: "XRP 리플", hint: "Xaman·레저, RLUSD 등 토큰 포함" },
   { key: "ton", name: "TON", hint: "톤키퍼·텔레그램 월렛, USDT 포함" },
+  { key: "aptos", name: "Aptos", hint: "페트라, USDT·USDC 포함" },
+  { key: "ltc", name: "라이트코인", hint: "Ltub·zpub 또는 주소" },
 ];
 
 function Tile({ active, onClick, title, hint }: { active: boolean; onClick: () => void; title: string; hint?: string }) {
@@ -1399,13 +1443,13 @@ function AddAccount() {
 
       {tab === "wallet" && (
         <div className="space-y-5">
-          <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {WALLETS.map((w) => (
               <Tile key={w.key} active={wallet === w.key} onClick={() => setWallet(w.key)} title={w.name} hint={w.hint} />
             ))}
           </div>
           <div className="max-w-xl">
-            {wallet === "evm" ? <EvmForm /> : wallet === "btc" ? <BtcForm /> : wallet === "tron" ? <TronForm /> : wallet === "xrp" ? <XrpForm /> : wallet === "ton" ? <TonForm /> : <SolanaForm />}
+            {wallet === "evm" ? <EvmForm /> : wallet === "btc" ? <BtcForm /> : wallet === "tron" ? <TronForm /> : wallet === "xrp" ? <XrpForm /> : wallet === "ton" ? <TonForm /> : wallet === "aptos" ? <AptosForm /> : wallet === "ltc" ? <BtcForm key="ltc" coin="ltc" /> : <SolanaForm />}
           </div>
         </div>
       )}
