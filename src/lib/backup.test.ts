@@ -20,7 +20,7 @@ const payload: BackupPayload = {
 describe("암호화 백업", () => {
   it("같은 비밀번호로 열면 그대로 돌아온다", async () => {
     const file = await encryptBackup(payload, "correct horse");
-    expect(file).not.toContain("OKX"); // 내용이 그대로 보이지 않는다
+    expect(file).not.toContain("파일"); // 내용이 그대로 보이지 않는다 (암호문은 영문·숫자뿐이라 한글이 나오면 평문)
     const back = await decryptBackup(file, "correct horse");
     expect(back).toEqual(payload);
     expect(summarize(back)).toMatchObject({ sources: 1, ledger: 20000, decisions: 1 });

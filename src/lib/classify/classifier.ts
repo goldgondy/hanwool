@@ -6,6 +6,8 @@ import type { Classification, Decision } from "./types";
 // 브릿지(R8)는 해당 데이터가 생기면 추가한다. 해시 없는 매칭(R11)은 아래 matchUnhashedTransfers.
 
 const isFiatKey = (assetKey: string) => assetKey.startsWith("fiat:");
+// 내 계정 간 이체에서 받은 수량이 보낸 수량보다 적어도 되는 최대 비율 (이체 수수료)
+const PAIR_MAX_DIFF = new Decimal("0.05");
 
 // 체인별 공식 USDT·USDC 컨트랙트 (assetKey 형식). EVM은 소문자, 트론·솔라나는 Base58 그대로.
 export const OFFICIAL_STABLES: Record<string, Set<string>> = {
@@ -117,6 +119,30 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
     };
   }
 
+  // R4 (차이 허용): 거래 번호로 묶인 서로 다른 계정의 이체인데 수량이 조금 다른 경우
+  //  - 받은 쪽이 아주 조금 많음(보낸 수량의 0.0001% 이하): 거래소가 소수점을 반올림해 적은 것
+  //  - 받은 쪽이 적음(5% 이하): 거래소가 출금 수량에 수수료를 포함해 적은 것 → 차이를 이체 수수료로
+  const hashed = new Set(legs.map((e) => e.sourceId)).size > 1 && legs.some((e) => e.txHash);
+  if (hashed && byAsset.size === 1) {
+    const [net] = [...byAsset.values()];
+    const sent = legs.filter((e) => e.amount.startsWith("-")).reduce((s, e) => s.plus(e.amount), new Decimal(0)).abs();
+    const dust = sent.mul("0.000001");
+    if (sent.gt(0) && net.abs().lte(dust)) {
+      return { ...base, category: "internal_transfer", status: "confirmed", rule: "R4", reason: "같은 거래 번호로 내 두 계정에 나가고 들어옴 (소수점 반올림 차이)" };
+    }
+    if (sent.gt(0) && net.isNeg() && net.abs().lte(sent.mul(PAIR_MAX_DIFF))) {
+      const asset = legs.find((e) => e.amount.startsWith("-"))!.asset;
+      return {
+        ...base,
+        category: "internal_transfer",
+        status: "confirmed",
+        rule: "R4",
+        reason: `같은 거래 번호로 내 두 계정에 나가고 들어옴 (차이 ${net.abs().toString()}은 이체 수수료로 봄)`,
+        pair: { key, feeAsset: asset, feeQty: net.abs().toString() },
+      };
+    }
+  }
+
   const ins = legs.filter((e) => !e.amount.startsWith("-"));
   const outs = legs.filter((e) => e.amount.startsWith("-"));
 
@@ -180,6 +206,9 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
 // 전체 원장을 그룹으로 묶어 분류하고, 사용자 결정이 있으면 그것을 우선한다.
 // 트랜잭션 해시 표기 통일 (대소문자, 0x 유무)
 const normHash = (h: string) => h.trim().toLowerCase().replace(/^0x/, "");
+// 블록체인 거래 번호로 보이는 값만 쓴다 (16진수 32자 이상, 또는 솔라나 등 base58 43자 이상).
+// 바이낸스 "Internal transfer", 거래소 내부 번호처럼 여러 기록이 같은 값을 가질 수 있는 것으로 묶으면 남의 거래끼리 합쳐진다.
+export const looksLikeChainHash = (h: string) => /^(0x)?[0-9a-f]{32,}$/i.test(h.trim()) || /^[1-9A-HJ-NP-Za-km-z]{43,}$/.test(h.trim());
 
 // 같은 트랜잭션 해시를 가진 그룹을 하나로 합친다.
 // 예: 거래소 출금 기록(bybit:wd:…)과 내 지갑 입금 기록(btc:<txid>)은 같은 이동이다 → 합쳐서 R4로 내 계정 간 이체.
@@ -202,7 +231,7 @@ export function groupByTransaction(entries: LedgerEntry[]): Map<string, LedgerEn
 
   const byHash = new Map<string, string>();
   for (const e of entries) {
-    if (!e.txHash) continue;
+    if (!e.txHash || !looksLikeChainHash(e.txHash)) continue;
     const h = normHash(e.txHash);
     const other = byHash.get(h);
     if (!other) {
@@ -246,11 +275,11 @@ export function classifyAll({ entries, ownAddresses, decisions }: ClassifyInput)
 // R11: 거래 번호가 없어 R4로 묶이지 못한 내 계정 간 이체를 수량·시각으로 짝짓는다.
 // 예: 업비트 화면 붙여넣기의 USDT 100 출금(거래 번호 없음) → 2시간 뒤 바이낸스 USDT 99 입금 (출금 수수료 1).
 // 조건: 한쪽은 외부로 나감(R13), 다른 쪽은 외부에서 들어옴(R12), 서로 다른 계정, 같은 코인, 한 자산만 이동,
-//       입금이 출금 10분 전 ~ 12시간 뒤, 받은 수량이 보낸 수량 이하이고 차이가 5% 이내. 수량 차이·시간 차가 작은 짝부터 정한다.
+//       입금이 출금 2시간 전 ~ 48시간 뒤, 받은 수량이 보낸 수량 이하이고 차이가 5% 이내. 수량 차이·시간 차가 작은 짝부터 정한다.
+//       (2시간 전: 파일마다 시간대 표기가 달라 생기는 어긋남, 48시간 뒤: 출금 심사·블록 확인 지연)
 // 추정이므로 "제안" 상태로 두며, 분류 검토에서 사용자가 바꿀 수 있다.
-const PAIR_BEFORE_MS = 10 * 60_000;
-const PAIR_AFTER_MS = 12 * 3600_000;
-const PAIR_MAX_DIFF = new Decimal("0.05");
+const PAIR_BEFORE_MS = 2 * 3600_000;
+const PAIR_AFTER_MS = 48 * 3600_000;
 
 interface Side {
   view: GroupView;

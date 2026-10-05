@@ -23,7 +23,7 @@ describe("buildBybitEntries", () => {
       { id: "d2", coin: "USDT", amount: "5", txID: "0xBBB", status: 2, successAt: String(T - 5) }, // 처리 중 → 제외
     ],
     withdrawals: [
-      { withdrawId: "w1", coin: "BTC", amount: "0.005", withdrawFee: "0.0002", txID: "abcdef", status: "success", createTime: String(T + 10), updateTime: String(T + 11) },
+      { withdrawId: "w1", coin: "BTC", amount: "0.005", withdrawFee: "0.0002", txID: "abababababababababababababababababababababababababababababababab", status: "success", createTime: String(T + 10), updateTime: String(T + 11) },
       { withdrawId: "w2", coin: "BTC", amount: "1", txID: "", status: "CancelByUser", createTime: String(T + 12) },
     ],
   });
@@ -62,7 +62,7 @@ describe("buildBybitEntries", () => {
       amount: "0.005",
       kind: "transfer",
       groupId: "btc:ABCDEF",
-      txHash: "ABCDEF",
+      txHash: "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
     };
     // 거래소는 자산을 "BTC", 지갑은 "btc:native"로 적지만 같은 코인으로 비교해야 한다.
     const groups = classifyAll({ entries: [...entries, wallet], ownAddresses: new Set(), decisions: new Map() });

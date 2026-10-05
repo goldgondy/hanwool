@@ -121,7 +121,7 @@ describe("R11 거래 번호 없는 이체 짝짓기", () => {
       ex({ sourceId: "a", groupId: "a:1", amount: "-100", time: 0 }),
       ex({ sourceId: "b", groupId: "b:1", amount: "90", time: H }),
       ex({ sourceId: "a", groupId: "a:2", amount: "-50", time: 0 }),
-      ex({ sourceId: "b", groupId: "b:2", amount: "50", time: 13 * H }),
+      ex({ sourceId: "b", groupId: "b:2", amount: "50", time: 49 * H }), // 48시간 넘게 지난 입금
       ex({ sourceId: "c", groupId: "c:1", amount: "-30", time: 0 }),
       ex({ sourceId: "c", groupId: "c:2", amount: "30", time: H }),
     ]);
