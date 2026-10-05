@@ -1,7 +1,8 @@
 import Decimal from "@/lib/decimal";
 import { fiatAssetKey } from "@/lib/assets";
 import type { LedgerEntry } from "@/lib/db";
-import { rowKey } from "./csv";
+import { rowKey, unitOf } from "./csv";
+export { unitOf };
 import { parseAmount, parseKst } from "./upbit";
 import type { CsvAdapter, ImportResult } from "./types";
 
@@ -16,11 +17,6 @@ import type { CsvAdapter, ImportResult } from "./types";
 
 export const BITHUMB_COLUMNS = ["거래일시", "자산", "거래구분", "거래수량", "체결가격", "거래금액", "수수료", "정산금액"];
 
-// "0.02281208 BTC" → "BTC", "5,034,802 KRW" → "KRW"
-export function unitOf(s: string | undefined): string | null {
-  const m = (s ?? "").match(/([A-Za-z][A-Za-z0-9]*)\s*$/);
-  return m ? m[1].toUpperCase() : null;
-}
 
 const keyOf = (coin: string) => (coin === "KRW" ? fiatAssetKey("KRW") : coin);
 

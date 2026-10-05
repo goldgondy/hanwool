@@ -1,14 +1,16 @@
 import Decimal from "@/lib/decimal";
 import { fiatAssetKey } from "@/lib/assets";
 import type { LedgerEntry } from "@/lib/db";
-import { rowKey } from "./csv";
+import { rowKey, unitOf } from "./csv";
 import type { CsvAdapter, CsvTable, ImportResult } from "./types";
 
 // 업비트 거래내역 화면 복사·붙여넣기 (업비트는 거래내역 파일 내보내기를 주지 않는다).
 // 업비트 웹 → 투자내역 → 거래내역 표를 드래그해 복사한 글자를 표로 바꾼다.
 // 표의 열: 체결시간 · 코인 · 마켓 · 종류(매수/매도/입금/출금) · 거래수량 · 거래단가 · 거래금액 · 수수료 · 정산금액 · 주문시간
 // 복사 방식(브라우저·화면)에 따라 칸이 탭으로 나뉘거나 줄로 나뉘므로, 열 순서 대신 '시각'과 '종류'를 기준으로 기록을 찾는다.
-// ⚠ 실제 화면으로 검증 전. 미리보기에서 건수·기간을 확인한 뒤 가져온다.
+// 2026-10-05 세무사 제공 화면 캡처로 확인한 규칙 (시각은 분까지, 날짜·시간이 두 줄):
+//   매수: 정산금액 = 거래금액 + 수수료(원 단위 반올림)   매도: 정산금액 = 거래금액 − 수수료
+//   출금: 정산금액 = 거래수량 + 수수료 (거래수량 = 보낸 금액)   입금: 정산금액 = 거래수량
 
 export const UPBIT_COLUMNS = ["체결시간", "코인", "마켓", "종류", "거래수량", "거래단가", "거래금액", "수수료", "정산금액", "주문시간"];
 
@@ -116,7 +118,7 @@ export const upbitHistory: CsvAdapter = {
   exchangeName: "업비트",
   formatName: "거래내역 화면 붙여넣기",
   howToExport: "업비트 웹 → 투자내역 → 거래내역 → 기간·종류(전체) 선택 → 표를 끝까지 내려 모두 불러온 뒤 마우스로 드래그(또는 Ctrl+A)해 복사 → 아래 칸에 붙여넣기",
-  verified: false,
+  verified: true,
 
   detect: (h) => UPBIT_COLUMNS.slice(0, 5).every((c) => h.includes(c)),
 
@@ -160,7 +162,10 @@ export const upbitHistory: CsvAdapter = {
           { ...base, id: `${id}:coin`, asset: coin, assetKey: keyOf(coin), amount: (buy ? q : q.neg()).toString(), kind: "trade", groupId },
           { ...base, id: `${id}:quote`, asset: market, assetKey: keyOf(market), amount: (buy ? f.neg() : f).toString(), kind: "trade", groupId },
         );
-        if (!fee.isZero()) entries.push({ ...base, id: `${id}:fee`, asset: market, assetKey: keyOf(market), amount: fee.neg().toString(), kind: "fee", groupId });
+        // 수수료는 화면에 소수(0.99원)로 나오지만 실제 원화 잔고는 정산금액만큼 바뀐다 → 정산금액과 거래금액의 차이를 수수료로 쓴다
+        const settled = parseAmount(row["정산금액"]);
+        const realFee = settled && unitOf(row["정산금액"]) === market ? new Decimal(settled).abs().minus(f).abs() : fee;
+        if (!realFee.isZero()) entries.push({ ...base, id: `${id}:fee`, asset: market, assetKey: keyOf(market), amount: realFee.neg().toString(), kind: "fee", groupId });
       } else {
         const deposit = type === "입금";
         const groupId = `upbit:paste:${key}`;
@@ -171,7 +176,7 @@ export const upbitHistory: CsvAdapter = {
 
     if (bad) warnings.push(`${bad}줄은 수량·금액·시각을 읽지 못해 건너뛰었습니다.`);
     if (entries.some((e) => e.kind === "transfer" && e.assetKey !== fiatAssetKey("KRW"))) {
-      warnings.push("화면 내역에는 블록체인 거래 번호가 없어, 내 지갑·해외 거래소로 보낸 출금은 분류 검토에서 직접 '내 계정 간 이체'로 확인해야 합니다.");
+      warnings.push("화면 내역에는 블록체인 거래 번호가 없어, 내 지갑·다른 거래소와의 코인 입출금은 수량·시각으로 짝을 찾습니다. 못 찾은 것은 분류 검토에서 확인하세요.");
     }
     return { entries, warnings, unknownTypes: [], range: entries.length ? { from, to } : null, rowCount: table.rows.length };
   },

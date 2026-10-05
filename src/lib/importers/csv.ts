@@ -59,3 +59,9 @@ function cyrb53(str: string, seed = 0): string {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
+
+// 칸 끝의 단위: "0.02281208 BTC" → "BTC", "5,034,802 KRW" → "KRW" (빗썸·업비트)
+export function unitOf(s: string | undefined): string | null {
+  const m = (s ?? "").match(/([A-Za-z][A-Za-z0-9]*)\s*$/);
+  return m ? m[1].toUpperCase() : null;
+}
