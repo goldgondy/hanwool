@@ -4,6 +4,7 @@ import { fetchBtcBalances } from "@/lib/ledger/btc-sync";
 import { csvSourcesShadowedByApi } from "@/lib/ledger/dedup";
 import { fetchSolanaBalances } from "@/lib/ledger/solana-sync";
 import { fetchXrpBalances } from "@/lib/ledger/xrp-sync";
+import { fetchTonBalances } from "@/lib/ledger/ton-sync";
 import { fetchTronBalances } from "@/lib/ledger/tron-sync";
 import { fetchBinanceBalances } from "@/lib/sources/binance";
 import { fetchEvmBalances } from "@/lib/sources/evm";
@@ -74,6 +75,8 @@ export async function takeSnapshot(note?: string): Promise<Snapshot> {
           balances = await fetchSolanaBalances(s);
         } else if (s.kind === "xrp") {
           balances = await fetchXrpBalances(s);
+        } else if (s.kind === "ton") {
+          balances = await fetchTonBalances(s);
         } else {
           balances = await fetchEvmBalances(s);
         }

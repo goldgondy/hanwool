@@ -21,6 +21,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "sol:Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
     "avax:0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
     "plasma:0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", // USDT0 (이름을 USDT로 맞춤, lib/sources/evm.ts)
+    "ton:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe", // TON USD₮
   ]),
   USDC: new Set([
     "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -39,7 +40,7 @@ function isImpersonatingStable(e: LedgerEntry) {
   const official = OFFICIAL_STABLES[e.asset.toUpperCase()];
   if (!official || e.origin === "exchange") return false;
   const [chain, contract] = e.assetKey.split(":");
-  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, avax: 1, plasma: 1, tron: 1, sol: 1 })) return false;
+  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, avax: 1, plasma: 1, ton: 1, tron: 1, sol: 1 })) return false;
   return !official.has(e.assetKey);
 }
 
@@ -191,6 +192,10 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
       });
     if (selfSent) {
       return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "토큰 컨트랙트가 직접 보낸 토큰 (스팸 의심)" };
+    }
+    // R10d: 아주 적은 금액에 광고 메모를 붙인 먼지 송금 (TON 등, 빌더가 rawType "Dust"로 표시)
+    if (outs.length === 0 && ins.every((e) => e.rawType === "Dust")) {
+      return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "아주 적은 금액의 먼지 송금 (광고 메모 스팸 의심)" };
     }
     // R10c: 이름이 웹 주소인 토큰 (예: "www.basex.cfd") → 사기 사이트로 유도하는 에어드랍 스팸
     if (outs.length === 0 && ins.every((e) => e.origin !== "exchange" && /(^www\.|https?:|\.(com|io|net|org|xyz|cfd|top|site|app|fi|vip|pro|cc|me|gift|claim)\b|t\.me\/)/i.test(e.asset))) {

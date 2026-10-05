@@ -37,6 +37,7 @@ function txUrl(groupKey: string) {
   if (chain === "tron") return `https://tronscan.org/#/transaction/${hash}`;
   if (chain === "sol") return hash === "reward" ? undefined : `https://solscan.io/tx/${hash}`;
   if (chain === "xrp") return `https://xrpscan.com/tx/${hash}`;
+  if (chain === "ton") return undefined; // TON 묶음 키는 처리 흐름(trace) ID라 거래 링크가 아니다
   const evm = EVM_CHAINS[chain as EvmChain];
   return evm ? `${evm.explorer}/tx/${hash}` : undefined;
 }
