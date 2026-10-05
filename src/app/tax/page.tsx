@@ -267,13 +267,19 @@ export default function TaxPage() {
             </Card>
           )}
 
-          {(report.engine.warnings.length > 0 || report.built.unpriced.length > 0) && (
+          {(report.engine.warnings.length > 0 || report.built.unpriced.length > 0 || report.fallbackPriced.length > 0) && (
             <Card as="section" className="space-y-1 text-sm">
               <h3 className="font-semibold">확인이 필요한 점</h3>
               {report.built.unpriced.length > 0 && (
                 <p className="text-amber-700 dark:text-amber-400">
                   원화 시세를 찾지 못해 0원으로 계산한 항목 {report.built.unpriced.length}건 (
                   {[...new Set(report.built.unpriced.map((u) => u.pool))].slice(0, 8).join(", ")})
+                </p>
+              )}
+              {report.fallbackPriced.length > 0 && (
+                <p className="text-amber-700 dark:text-amber-400">
+                  업비트·바이낸스에 없어 다른 거래소·CoinGecko 시세를 쓴 코인: {report.fallbackPriced.map((f) => `${f.symbol}(${f.via})`).join(", ")}. 이름만 같은
+                  다른 코인일 수 있으니 금액이 이상하면 확인하세요.
                 </p>
               )}
               <ul className="list-disc space-y-0.5 pl-5 text-xs text-stone-600 dark:text-stone-400">
