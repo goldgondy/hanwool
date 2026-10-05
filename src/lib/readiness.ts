@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { loadClassifiedGroups } from "@/lib/classify/load";
 import { ignoredDiffs } from "@/lib/reconcile/run";
 import { missingFiles } from "@/lib/importers/kits";
+import { lastBackupAt } from "@/lib/backup";
 
 // 신고 준비 현황: 홈 화면의 단계별 점검과 메뉴의 표시에 쓴다.
 
@@ -28,15 +29,17 @@ export interface Readiness {
   reconcile: ReconcileStatus;
   review: { needsReview: number; suggested: number; total: number };
   latestSnapshot: { id: string; takenAt: number; totalKrw: string } | null;
+  backup: { lastAt: number | null; stale: boolean }; // stale: 데이터가 있는데 백업이 없거나 30일 넘음
 }
 
 export async function loadReadiness(): Promise<Readiness> {
-  const [sources, states, reconcile, groups, snapshot] = await Promise.all([
+  const [sources, states, reconcile, groups, snapshot, lastBackup] = await Promise.all([
     db.sources.toArray(),
     db.syncState.toArray(),
     reconcileStatus(),
     loadClassifiedGroups(),
     db.snapshots.orderBy("takenAt").last(),
+    lastBackupAt(),
   ]);
   return {
     sources: sources.length,
@@ -49,5 +52,6 @@ export async function loadReadiness(): Promise<Readiness> {
       total: groups.length,
     },
     latestSnapshot: snapshot ? { id: snapshot.id, takenAt: snapshot.takenAt, totalKrw: snapshot.totalKrw } : null,
+    backup: { lastAt: lastBackup, stale: sources.length > 0 && (!lastBackup || Date.now() - lastBackup > 30 * 86_400_000) },
   };
 }

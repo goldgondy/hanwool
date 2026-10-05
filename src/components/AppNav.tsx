@@ -30,6 +30,7 @@ const TOOLS: Item[] = [
   { href: "/foreign", label: "해외계좌 신고" },
   { href: "/snapshots", label: "보유 기록" },
   { href: "/ledger", label: "거래 원장" },
+  { href: "/backup", label: "백업·복원" },
 ];
 
 function isActive(pathname: string, href: string) {

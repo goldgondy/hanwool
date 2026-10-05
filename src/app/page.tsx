@@ -8,7 +8,7 @@ import { takeSnapshot } from "@/lib/snapshot";
 import { loadReadiness, type Readiness } from "@/lib/readiness";
 import { DEEMED_COST_DEADLINE, formatDateTime, formatKrw } from "@/lib/format";
 import { useVaultUnlocked, VaultPanel } from "@/components/VaultPanel";
-import { Badge, btn, Card, ErrorText } from "@/components/ui";
+import { Badge, btn, Callout, Card, ErrorText } from "@/components/ui";
 
 function daysLeft() {
   return Math.max(0, Math.ceil((DEEMED_COST_DEADLINE - Date.now()) / 86_400_000));
@@ -143,6 +143,15 @@ export default function Home() {
         <h1 className="text-2xl font-bold tracking-tight">가상자산 세금 준비</h1>
         <p className="text-sm text-stone-500">2027년부터 가상자산 소득에 22% 세금이 붙습니다. 아래 순서대로 진행하면 2028년 5월 신고 자료가 준비됩니다.</p>
       </div>
+
+      {readiness?.backup.stale && (
+        <Callout tone="warn" title={readiness.backup.lastAt ? "백업한 지 30일이 넘었습니다" : "아직 백업 파일이 없습니다"}>
+          데이터는 이 브라우저에만 있어 브라우저 데이터를 지우면 사라집니다.{" "}
+          <Link href="/backup" className="font-medium underline">
+            백업 내려받기 →
+          </Link>
+        </Callout>
+      )}
 
       <div className="grid gap-4 md:grid-cols-[1fr_1.4fr]">
         {/* 기준일 카드 */}
