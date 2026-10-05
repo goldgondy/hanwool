@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type BinanceSource, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type OkxSource, type SolanaSource, type TronSource, type XapiSource } from "@/lib/db";
+import { db, type BinanceSource, type BtcSource, type CsvSource, type EvmChain, type EvmSource, type LedgerEntry, type OkxSource, type SolanaSource, type TronSource, type XapiSource, type XrpSource } from "@/lib/db";
+import { fetchXrpBalances, syncXrpHistory } from "@/lib/ledger/xrp-sync";
 import { fetchSolanaBalances, syncSolanaHistory } from "@/lib/ledger/solana-sync";
 import { syncOkxHistory } from "@/lib/ledger/okx-sync";
 import { syncBinanceHistory } from "@/lib/ledger/binance-sync";
@@ -20,8 +21,8 @@ import { EVM_CHAINS, fetchEvmBalances } from "@/lib/sources/evm";
 import type { RawBalance } from "@/lib/sources/types";
 import { btn, Callout, Card, Empty, ErrorText, PageHeader, Pill, Progress, trCls } from "@/components/ui";
 
-type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | XapiSource | OkxSource | BinanceSource;
-type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XapiSource | OkxSource | BinanceSource;
+type LedgerSource = EvmSource | BtcSource | TronSource | SolanaSource | XrpSource | CsvSource | XapiSource | OkxSource | BinanceSource;
+type SyncableSource = EvmSource | BtcSource | TronSource | SolanaSource | XrpSource | XapiSource | OkxSource | BinanceSource;
 
 // 동기화 결과 한 줄 (EVM은 체인별, 비트코인은 지갑 하나)
 interface SyncLine {
@@ -41,6 +42,10 @@ async function syncSource(source: SyncableSource, onProgress: (msg: string) => v
   if (source.kind === "solana") {
     const r = await syncSolanaHistory(source, onProgress);
     return [{ title: "Solana", summary: `새 항목 ${r.added}건 반영`, notes: r.warnings }];
+  }
+  if (source.kind === "xrp") {
+    const r = await syncXrpHistory(source, onProgress);
+    return [{ title: "XRP", summary: `새 항목 ${r.added}건 반영`, notes: r.warnings }];
   }
   if (source.kind === "binance") {
     const r = await syncBinanceHistory(source, onProgress);
@@ -80,6 +85,7 @@ function fetchBalances(source: SyncableSource, onProgress: (msg: string) => void
   if (source.kind === "binance") return fetchBinanceBalances(source, () => {});
   if (source.kind === "tron") return fetchTronBalances(source);
   if (source.kind === "solana") return fetchSolanaBalances(source);
+  if (source.kind === "xrp") return fetchXrpBalances(source);
   return source.kind === "btc" ? fetchBtcBalances(source, onProgress) : fetchEvmBalances(source);
 }
 
@@ -103,6 +109,7 @@ function txUrl(e: LedgerEntry) {
   if (chain === "btc") return `https://mempool.space/tx/${e.txHash}`;
   if (chain === "tron") return `https://tronscan.org/#/transaction/${e.txHash}`;
   if (chain === "sol") return `https://solscan.io/tx/${e.txHash}`;
+  if (chain === "xrp") return `https://xrpscan.com/tx/${e.txHash}`;
   const evm = EVM_CHAINS[chain as EvmChain];
   return evm ? `${evm.explorer}/tx/${e.txHash}` : undefined;
 }
@@ -334,7 +341,7 @@ function SourceLedger({ source }: { source: LedgerSource }) {
 export default function LedgerPage() {
   const sources = useLiveQuery(() => db.sources.orderBy("createdAt").toArray(), []);
   const wallets = (sources ?? []).filter(
-    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "csv" || s.kind === "xapi" || s.kind === "okx" || s.kind === "binance",
+    (s): s is LedgerSource => s.kind === "evm" || s.kind === "btc" || s.kind === "tron" || s.kind === "solana" || s.kind === "xrp" || s.kind === "csv" || s.kind === "xapi" || s.kind === "okx" || s.kind === "binance",
   );
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = wallets.find((s) => s.id === activeId) ?? wallets[0];
@@ -354,7 +361,7 @@ export default function LedgerPage() {
             <Pill key={s.id} active={s.id === active?.id} onClick={() => setActiveId(s.id)}>
               {s.label}{" "}
               <span className="opacity-60">
-                {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "csv" ? "CSV" : "API"}
+                {s.kind === "evm" || s.kind === "tron" || s.kind === "solana" || s.kind === "xrp" ? short(s.address) : s.kind === "btc" ? "₿" : s.kind === "csv" ? "CSV" : "API"}
               </span>
             </Pill>
           ))}

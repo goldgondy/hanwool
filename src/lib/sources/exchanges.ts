@@ -4,12 +4,13 @@ import type { RawBalance, Warn } from "@/lib/sources/types";
 import { decrypt } from "@/lib/vault";
 import { fetchCoinbaseBalances } from "./coinbase";
 import { fetchKoreaBalances } from "./korea";
+import { fetchCoinoneBalances, fetchGopaxBalances } from "./korea-more";
 import { hmacSha256Base64, hmacSha256Hex, hmacSha512Hex, sha512Hex } from "./sign";
 
 // 거래소 API 잔고 조회 (바이비트, 비트겟, MEXC, 게이트). 서명은 브라우저에서 하고 /api/relay/[거래소]로 중계한다.
 // 서명 방식은 각 거래소 공식 문서·SDK 기준 (2026-09-30 확인). ⚠ 실제 키로 검증 전.
 
-export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb";
+export type ApiExchange = "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb" | "coinone" | "gopax";
 
 export const API_EXCHANGES: Record<
   ApiExchange,
@@ -29,6 +30,20 @@ export const API_EXCHANGES: Record<
     keyHelp: "빗썸 → 마이페이지 → API 관리 → 권한은 '자산 조회·주문 조회·입출금 조회'만. 이 브라우저에서 직접 조회하므로 IP를 제한했다면 지금 쓰는 인터넷의 공인 IP를 등록하세요",
     keyLabel: "Connect Key (API Key)",
     secretLabel: "Secret Key",
+  },
+  coinone: {
+    name: "코인원",
+    needsPassphrase: false,
+    keyHelp: "코인원 → 마이페이지 → API 관리(Open API) → 새 키 발급 → 권한은 '잔고 조회·주문 조회(체결 내역)·입출금 내역 조회'만. 주문·출금 권한은 켜지 마세요",
+    keyLabel: "Access Token",
+    secretLabel: "Secret Key",
+  },
+  gopax: {
+    name: "고팍스",
+    needsPassphrase: false,
+    keyHelp: "고팍스 → 마이페이지 → API 키 관리 → 새 키 발급 → 권한은 조회만. 키 유효기간은 1년입니다",
+    keyLabel: "API Key",
+    secretLabel: "Secret",
   },
   coinbase: {
     name: "코인베이스",
@@ -274,5 +289,9 @@ export async function fetchXapiBalances(source: XapiSource, warn: Warn = () => {
     case "upbit":
     case "bithumb":
       return fetchKoreaBalances(source.exchange, creds);
+    case "coinone":
+      return fetchCoinoneBalances(creds);
+    case "gopax":
+      return fetchGopaxBalances(creds);
   }
 }

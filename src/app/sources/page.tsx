@@ -16,6 +16,7 @@ import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/source
 import { discoverWallets, requestAddresses, type WalletDetail } from "@/lib/wallet/eip6963";
 import { isTronAddress } from "@/lib/tron/address";
 import { isSolanaAddress } from "@/lib/solana/address";
+import { isXrpAddress } from "@/lib/xrp/address";
 import { deriveAddress, parseWalletInput, SCRIPT_LABEL, type ScriptType } from "@/lib/btc/descriptor";
 import { DEFAULT_ESPLORA } from "@/lib/btc/esplora";
 import { DEFAULT_GAP_LIMIT } from "@/lib/btc/scan";
@@ -129,7 +130,7 @@ function OkxForm() {
   );
 }
 
-const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", csv: "파일", manual: "직접 입력" } as const;
+const KIND_LABEL = { binance: "Binance", okx: "OKX", xapi: "API", evm: "EVM", btc: "Bitcoin", tron: "Tron", solana: "Solana", xrp: "XRP", csv: "파일", manual: "직접 입력" } as const;
 
 function SolanaForm() {
   const [label, setLabel] = useState("솔라나 지갑");
@@ -187,6 +188,44 @@ function SolanaForm() {
           </button>
         </div>
       )}
+    </form>
+  );
+}
+
+function XrpForm() {
+  const [label, setLabel] = useState("XRP 지갑");
+  const [address, setAddress] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const valid = isXrpAddress(address);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!valid) return;
+    const addr = address.trim();
+    const existing = (await db.sources.toArray()).find((s) => s.kind === "xrp" && s.address === addr);
+    if (existing) {
+      setNotice(`이미 연결된 주소입니다 (${existing.label}).`);
+      return;
+    }
+    await db.sources.add({ id: crypto.randomUUID(), kind: "xrp", label: label.trim() || "XRP 지갑", address: addr, createdAt: Date.now() });
+    setNotice(`${label} (${addr.slice(0, 6)}…${addr.slice(-4)})를 연결했습니다.`);
+    setAddress("");
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={card}>
+      <h3 className="font-semibold">XRP 지갑 (Xaman, 레저, 디센트 등)</h3>
+      <p className="text-xs leading-5 text-stone-500">
+        r로 시작하는 지갑 주소를 입력하세요. XRP와 신뢰선 토큰(RLUSD 등), XRP 원장 안의 교환(DEX)까지 공개 기록으로 불러옵니다.
+        거래소의 XRP 입금 주소(데스티네이션 태그를 쓰는 주소)는 내 지갑이 아니니 넣지 마세요. <b>복구 문구나 시크릿 키(s…)는 절대 입력하지 마세요.</b>
+      </p>
+      <input className={input} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="이름" />
+      <input className={input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="r…" required />
+      {address && !valid && <p className="text-xs text-red-600">XRP 주소 형식이 아닙니다 (r로 시작, 체크섬 확인). X로 시작하는 주소는 지갑 앱에서 r 주소를 확인해 넣으세요.</p>}
+      {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
+      <button className={button} disabled={!valid}>
+        추가
+      </button>
     </form>
   );
 }
@@ -1161,7 +1200,7 @@ function sourceDetail(s: Source) {
   if (s.kind === "btc") return `${s.frozenAddresses?.length ? `주소 ${s.frozenAddresses.length}개 (xpub 지움)` : mask(s.input)} · ${new URL(s.esploraUrl).host}`;
   if (s.kind === "csv") return `파일 ${s.imports.length}개 가져옴`;
   if (s.kind === "xapi") return `API 키 ${mask(s.apiKey)}`;
-  if (s.kind === "tron" || s.kind === "solana") return `${s.address.slice(0, 6)}…${s.address.slice(-4)}`;
+  if (s.kind === "tron" || s.kind === "solana" || s.kind === "xrp") return `${s.address.slice(0, 6)}…${s.address.slice(-4)}`;
   if (s.kind === "manual") return "‘직접 입력’ 탭에서 관리";
   return `API 키 ${mask(s.apiKey)}`;
 }
@@ -1174,7 +1213,7 @@ function kindName(s: Source) {
 
 const GROUPS: { title: string; kinds: Source["kind"][] }[] = [
   { title: "거래소", kinds: ["binance", "okx", "xapi", "csv"] },
-  { title: "개인 지갑", kinds: ["btc", "evm", "tron", "solana"] },
+  { title: "개인 지갑", kinds: ["btc", "evm", "tron", "solana", "xrp"] },
   { title: "직접 입력", kinds: ["manual"] },
 ];
 
@@ -1244,15 +1283,16 @@ const TABS: { key: Tab; label: string; hint: string }[] = [
 ];
 
 type ExchangeChoice = "binance" | "okx" | ApiExchange;
-const EXCHANGE_ORDER: ExchangeChoice[] = ["upbit", "bithumb", "binance", "okx", "bybit", "coinbase", "bitget", "gate", "mexc"];
+const EXCHANGE_ORDER: ExchangeChoice[] = ["upbit", "bithumb", "coinone", "gopax", "binance", "okx", "bybit", "coinbase", "bitget", "gate", "mexc"];
 const exchangeName = (x: ExchangeChoice) => (x === "binance" ? "바이낸스" : x === "okx" ? "OKX" : API_EXCHANGES[x].name);
 
-type WalletChoice = "btc" | "evm" | "tron" | "solana";
+type WalletChoice = "btc" | "evm" | "tron" | "solana" | "xrp";
 const WALLETS: { key: WalletChoice; name: string; hint: string }[] = [
   { key: "evm", name: "이더리움 계열", hint: "메타마스크·라비 등, 이더리움·아비트럼·베이스·옵티미즘·폴리곤" },
   { key: "btc", name: "비트코인", hint: "zpub·xpub 또는 주소" },
   { key: "tron", name: "트론", hint: "TRC-20 USDT" },
   { key: "solana", name: "솔라나", hint: "팬텀·솔플레어" },
+  { key: "xrp", name: "XRP 리플", hint: "Xaman·레저, RLUSD 등 토큰 포함" },
 ];
 
 function Tile({ active, onClick, title, hint }: { active: boolean; onClick: () => void; title: string; hint?: string }) {
@@ -1293,7 +1333,7 @@ function AddAccount() {
 
       {tab === "exchange" && (
         <div className="space-y-5">
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
             {EXCHANGE_ORDER.map((x) => (
               <button
                 key={x}
@@ -1319,13 +1359,13 @@ function AddAccount() {
 
       {tab === "wallet" && (
         <div className="space-y-5">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             {WALLETS.map((w) => (
               <Tile key={w.key} active={wallet === w.key} onClick={() => setWallet(w.key)} title={w.name} hint={w.hint} />
             ))}
           </div>
           <div className="max-w-xl">
-            {wallet === "evm" ? <EvmForm /> : wallet === "btc" ? <BtcForm /> : wallet === "tron" ? <TronForm /> : <SolanaForm />}
+            {wallet === "evm" ? <EvmForm /> : wallet === "btc" ? <BtcForm /> : wallet === "tron" ? <TronForm /> : wallet === "xrp" ? <XrpForm /> : <SolanaForm />}
           </div>
         </div>
       )}

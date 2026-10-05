@@ -3,7 +3,7 @@ import type { Decision } from "@/lib/classify/types";
 
 // 모든 사용자 데이터는 브라우저 IndexedDB에만 저장된다. 서버로 전송하지 않는다.
 
-export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "csv" | "manual";
+export type SourceKind = "binance" | "okx" | "xapi" | "evm" | "btc" | "tron" | "solana" | "xrp" | "csv" | "manual";
 
 // AES-GCM 암호문. 복호화는 lib/vault.ts 참고.
 export interface EncryptedBlob {
@@ -71,7 +71,7 @@ export interface CsvSource {
 export interface XapiSource {
   id: string;
   kind: "xapi";
-  exchange: "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb";
+  exchange: "bybit" | "bitget" | "mexc" | "gate" | "coinbase" | "upbit" | "bithumb" | "coinone" | "gopax";
   label: string;
   apiKey: string;
   encSecret: EncryptedBlob;
@@ -97,6 +97,15 @@ export interface SolanaSource {
   createdAt: number;
 }
 
+// XRP 지갑 (Xaman, 레저 등). lib/ledger/xrp-sync.ts
+export interface XrpSource {
+  id: string;
+  kind: "xrp";
+  label: string;
+  address: string; // 클래식 주소 "r…"
+  createdAt: number;
+}
+
 // 직접 입력한 거래 (연결할 수 없는 거래소·오래된 거래·2026년 말 보유분). lib/manual.ts
 export interface ManualSource {
   id: string;
@@ -105,7 +114,7 @@ export interface ManualSource {
   createdAt: number;
 }
 
-export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | CsvSource | ManualSource;
+export type Source = BinanceSource | OkxSource | XapiSource | EvmSource | BtcSource | TronSource | SolanaSource | XrpSource | CsvSource | ManualSource;
 export type ExchangeSource = BinanceSource | OkxSource | XapiSource;
 export const isExchangeKind = (kind: SourceKind) => kind === "binance" || kind === "okx" || kind === "xapi";
 

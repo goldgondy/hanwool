@@ -6,6 +6,7 @@ import { syncBitget } from "@/lib/ledger/bitget-sync";
 import { syncGate } from "@/lib/ledger/gate-sync";
 import { syncMexc } from "@/lib/ledger/mexc-sync";
 import { syncKorea } from "@/lib/ledger/korea-sync";
+import { syncKoreaMore } from "@/lib/ledger/korea-more-sync";
 import { relay, signBybit, xapiCreds, type Creds } from "@/lib/sources/exchanges";
 
 // 거래소 API 거래 내역 동기화 (OKX는 lib/ledger/okx-sync.ts).
@@ -16,7 +17,7 @@ export interface XapiSyncResult {
   warnings: string[];
 }
 
-export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget", "gate", "mexc", "upbit", "bithumb"]);
+export const HISTORY_SUPPORTED = new Set<XapiSource["exchange"]>(["bybit", "coinbase", "bitget", "gate", "mexc", "upbit", "bithumb", "coinone", "gopax"]);
 
 const DAY = 86_400_000;
 const HISTORY_DAYS = 730; // 바이비트 거래 로그 보관 기간 (2년)
@@ -134,5 +135,6 @@ export async function syncXapiHistory(source: XapiSource, onProgress: (msg: stri
   if (source.exchange === "gate") return syncGate(source, onProgress);
   if (source.exchange === "mexc") return syncMexc(source, onProgress);
   if (source.exchange === "upbit" || source.exchange === "bithumb") return syncKorea({ ...source, exchange: source.exchange }, onProgress);
+  if (source.exchange === "coinone" || source.exchange === "gopax") return syncKoreaMore({ ...source, exchange: source.exchange }, onProgress);
   throw new Error("이 거래소의 거래 내역 API는 아직 지원하지 않습니다");
 }

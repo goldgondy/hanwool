@@ -10,7 +10,8 @@ import type { CsvAdapter, CsvTable } from "./types";
 export const ADAPTERS: CsvAdapter[] = [binanceStatement, bithumbHistory, okxHistory, okxTransfers, upbitHistory];
 
 // 지원 예정 거래소 (샘플 파일 대기)
-export const PLANNED_EXCHANGES = ["코인베이스", "바이비트", "비트겟", "MEXC", "게이트아이오"];
+// 코빗(미래에셋 디지털엑스): API 체결 내역이 최근 36시간뿐이라 과거 내역은 파일이 필요하다
+export const PLANNED_EXCHANGES = ["코빗(디지털엑스)", "코인베이스", "바이비트", "비트겟", "MEXC", "게이트아이오"];
 
 // 엑셀 시트처럼 이미 칸으로 나뉜 자료에서 변환기를 고른다.
 export function detectRows(data: string[][]): Detected | { adapter: null; headers: string[] } {
