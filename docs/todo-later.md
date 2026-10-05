@@ -82,3 +82,10 @@
 - **플라스마: Routescan 색인이 약 4일 뒤처짐** (보낸 거래 5건 중 3건만 조회됨). 동기화 때 지연 시간을 재서 경고한다.
   대안: Etherscan V2(chainid 9745, 무료 키 필요 여부 확인) 또는 노드의 eth_getLogs로 USDT0 전송을 직접 읽어 보완.
 - 플라스마 USDT0는 이름을 USDT로 맞춘다 (거래소 출금 "USDT (Plasma)"와 짝짓기 위해).
+
+## 9. BSC 실데이터 확인 (2026-10-06)
+
+BSC는 Etherscan V2 무료 플랜에서 지원하지 않는다 ("Free API access is not supported for this chain"). NodeReal(MegaNode) 무료 키를 사용자가 넣는 방식으로 구현 (`nr_getAssetTransfers`, `src/lib/sources/evm.ts`).
+- 공식 문서의 데모 키는 호출 한도가 바로 차서 실데이터 대사를 못 했다. 세무사님이 무료 키를 만들어 `.env.local`에 `NODEREAL_KEY=`로 넣으면 `npm run test:live -- src/lib/ledger/bsc.live.test.ts`로 확인.
+- 무료 플랜 한도(월 사용량)가 이용자 한 명의 전체 내역 조회에 충분한지 확인.
+- 도지코인도 같은 방식(이용자 무료 키, 예: BlockCypher·NOWNodes)으로 붙일지 결정.

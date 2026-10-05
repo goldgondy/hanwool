@@ -1,5 +1,5 @@
 import Decimal from "@/lib/decimal";
-import { db, type EvmChain, type EvmSource } from "@/lib/db";
+import { db, getSetting, type EvmChain, type EvmSource } from "@/lib/db";
 import type { RawBalance } from "@/lib/sources/types";
 import { OFFICIAL_STABLES } from "@/lib/classify/classifier";
 
@@ -11,7 +11,7 @@ import { OFFICIAL_STABLES } from "@/lib/classify/classifier";
 // - Blockscout가 없는 체인(아발란체·플라스마)은 Routescan의 Etherscan 형식 공개 API(키 없음, CORS 허용)를 쓴다 (routescan = 체인 ID).
 export const EVM_CHAINS: Record<
   EvmChain,
-  { name: string; native: string; blockscout: string; rpc: string; explorer: string; routescan?: number }
+  { name: string; native: string; blockscout: string; rpc: string; explorer: string; routescan?: number; nodereal?: boolean }
 > = {
   eth: { name: "Ethereum", native: "ETH", blockscout: "https://eth.blockscout.com", rpc: "https://eth.blockscout.com/api/eth-rpc", explorer: "https://etherscan.io" },
   arb: { name: "Arbitrum", native: "ETH", blockscout: "https://arbitrum.blockscout.com", rpc: "https://arbitrum.blockscout.com/api/eth-rpc", explorer: "https://arbiscan.io" },
@@ -20,6 +20,7 @@ export const EVM_CHAINS: Record<
   polygon: { name: "Polygon", native: "POL", blockscout: "https://polygon.blockscout.com", rpc: "https://polygon.blockscout.com/api/eth-rpc", explorer: "https://polygonscan.com" },
   avax: { name: "Avalanche", native: "AVAX", blockscout: "", rpc: "https://api.avax.network/ext/bc/C/rpc", explorer: "https://snowtrace.io", routescan: 43114 },
   plasma: { name: "Plasma", native: "XPL", blockscout: "", rpc: "https://rpc.plasma.to", explorer: "https://plasmascan.to", routescan: 9745 },
+  bsc: { name: "BSC", native: "BNB", blockscout: "", rpc: "", explorer: "https://bscscan.com", nodereal: true },
 };
 
 export function evmAssetKey(chain: EvmChain, contract: string | null) {
@@ -37,6 +38,63 @@ export function canonicalSymbol(chain: EvmChain, contract: string, symbol: strin
 
 // ── Routescan (Etherscan 형식) ──
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ── NodeReal (BSC) ──
+// BSC는 무료 공개 조회 서버가 없다 (Etherscan V2는 BSC가 유료, 2026-10-06 확인). BNB 체인 공식 협력사 NodeReal(MegaNode)의
+// 무료 키를 사용자가 넣으면, 주소별 전송 기록(nr_getAssetTransfers: 가스비·성공 여부·토큰 소수점 포함)과 노드 조회를 쓴다. 브라우저 직접 호출 가능.
+let noderealKey: string | undefined;
+export function setNodeRealKey(key: string | undefined) {
+  noderealKey = key?.trim() || undefined;
+}
+async function nodeRealUrl(): Promise<string> {
+  if (!noderealKey && typeof window !== "undefined") noderealKey = (await getSetting("noderealKey")) || undefined;
+  if (!noderealKey) throw new Error("BSC를 조회하려면 NodeReal 무료 API 키가 필요합니다 (연결 계정 → 이더리움 계열 지갑에서 입력)");
+  return `https://bsc-mainnet.nodereal.io/v1/${encodeURIComponent(noderealKey)}`;
+}
+export async function hasNodeRealKey() {
+  return !!noderealKey || (typeof window !== "undefined" && !!(await getSetting("noderealKey")));
+}
+
+export interface NrTransfer {
+  id: number;
+  category: "external" | "internal" | "20";
+  blockNum: string;
+  from: string;
+  to: string;
+  value: string; // 16진수
+  asset: string;
+  hash: string;
+  contractAddress?: string;
+  decimal?: string;
+  blockTimeStamp: number;
+  gasPrice?: number | string;
+  gasUsed?: number | string;
+  receiptsStatus?: number;
+  logIndex?: number;
+  traceIndex?: number;
+}
+
+export async function nodeRealTransfers(address: string, category: NrTransfer["category"], direction: "fromAddress" | "toAddress", fromBlock: number): Promise<NrTransfer[]> {
+  const url = await nodeRealUrl();
+  const out: NrTransfer[] = [];
+  let pageKey: string | undefined;
+  for (let attempt = 0; ; ) {
+    const params = { category: [category], [direction]: address, ...(fromBlock > 0 ? { fromBlock: `0x${fromBlock.toString(16)}` } : {}), maxCount: "0x3e8", order: "asc", ...(pageKey ? { pageKey } : {}) };
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "nr_getAssetTransfers", params: [params] }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (res.status === 429 && attempt < 5) {
+      await sleep(1000 * 2 ** attempt++);
+      continue;
+    }
+    if (res.status === 401 || res.status === 403) throw new Error("NodeReal API 키가 올바르지 않습니다");
+    const body = (await res.json()) as { result?: { transfers: NrTransfer[]; pageKey?: string }; error?: { message: string } };
+    if (body.error) throw new Error(`BSC 조회 실패 (${body.error.message})`);
+    out.push(...(body.result?.transfers ?? []));
+    pageKey = body.result?.pageKey || undefined;
+    if (!pageKey || (body.result?.transfers.length ?? 0) === 0) break;
+    await sleep(200);
+  }
+  return out;
+}
 
 export async function routescanGet<T>(chain: EvmChain, params: Record<string, string>): Promise<T[]> {
   const id = EVM_CHAINS[chain].routescan!;
@@ -143,7 +201,7 @@ export async function blockscoutGet<T>(
 export async function evmRpc<T>(chain: EvmChain, method: string, params: unknown[]): Promise<T | null> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetch(EVM_CHAINS[chain].rpc, {
+      const res = await fetch(EVM_CHAINS[chain].nodereal ? await nodeRealUrl() : EVM_CHAINS[chain].rpc, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -189,6 +247,7 @@ export async function blockscoutPages<T>(
 async function fetchRoutescanChain(address: string, chain: EvmChain, sourceId: string): Promise<RawBalance[]> {
   const { name, native } = EVM_CHAINS[chain];
   const out: RawBalance[] = [];
+  if (EVM_CHAINS[chain].nodereal) await nodeRealUrl(); // 키가 없으면 안내 문구로 실패
   const nativeHex = await evmRpc<string>(chain, "eth_getBalance", [address, "latest"]);
   if (nativeHex === null) throw new Error(`${name} 잔고 조회 실패 (노드가 응답하지 않습니다)`);
   const nativeAmount = fromBaseUnits(nativeHex, 18);
@@ -262,6 +321,14 @@ export async function detectActiveChains(address: string): Promise<{ chain: EvmC
   return Promise.all(
     (Object.keys(EVM_CHAINS) as EvmChain[]).map(async (chain) => {
       try {
+        if (EVM_CHAINS[chain].nodereal) {
+          // 키가 없으면 확인하지 않고 '안 씀'으로 둔다 (키 없이 체크되면 동기화가 실패하므로)
+          if (!(await hasNodeRealKey())) return { chain, status: "inactive" as const };
+          const [nonce, bal] = await Promise.all([evmRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]), evmRpc<string>(chain, "eth_getBalance", [address, "latest"])]);
+          if (nonce === null && bal === null) return { chain, status: "unknown" as const };
+          const active = (nonce !== null && parseInt(nonce, 16) > 0) || (bal !== null && BigInt(bal) > BigInt(0));
+          return { chain, status: active ? ("active" as const) : ("inactive" as const) };
+        }
         if (EVM_CHAINS[chain].routescan) {
           const [nonce, bal, tokens] = await Promise.all([
             evmRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]),
@@ -291,6 +358,6 @@ export async function detectActiveChains(address: string): Promise<{ chain: EvmC
 }
 
 export async function fetchEvmBalances(source: EvmSource): Promise<RawBalance[]> {
-  const results = await Promise.all(source.chains.map((c) => (EVM_CHAINS[c].routescan ? fetchRoutescanChain(source.address, c, source.id) : fetchChain(source.address, c))));
+  const results = await Promise.all(source.chains.map((c) => (EVM_CHAINS[c].routescan || EVM_CHAINS[c].nodereal ? fetchRoutescanChain(source.address, c, source.id) : fetchChain(source.address, c))));
   return results.flat();
 }

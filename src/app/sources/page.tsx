@@ -12,7 +12,7 @@ import { buildManualEntries, MANUAL_TYPES, validateManual, type ManualInput, typ
 import { formatDateTime } from "@/lib/format";
 import { API_EXCHANGES, type ApiExchange } from "@/lib/sources/exchanges";
 import type { CsvAdapter, CsvTable, ImportResult } from "@/lib/importers/types";
-import { detectActiveChains, EVM_CHAINS, type ChainActivity } from "@/lib/sources/evm";
+import { detectActiveChains, EVM_CHAINS, setNodeRealKey, type ChainActivity } from "@/lib/sources/evm";
 import { discoverWallets, requestAddresses, type WalletDetail } from "@/lib/wallet/eip6963";
 import { isTronAddress } from "@/lib/tron/address";
 import { isSolanaAddress } from "@/lib/solana/address";
@@ -1052,6 +1052,34 @@ const ACTIVITY_LABEL: Record<ChainActivity, { text: string; cls: string }> = {
   unknown: { text: "확인 실패", cls: "text-amber-700 dark:text-amber-400" },
 };
 
+// BSC 조회용 NodeReal 무료 키 (BSC는 무료 공개 조회 서버가 없다, lib/sources/evm.ts)
+function NodeRealKey() {
+  const saved = useLiveQuery(() => getSetting("noderealKey"), []);
+  const [key, setKey] = useState("");
+  return (
+    <div className="space-y-1.5 rounded-lg bg-amber-50 p-3 text-xs dark:bg-amber-950/40">
+      <p>
+        BSC는 무료 공개 조회 서버가 없어 <b>NodeReal(MegaNode) 무료 API 키</b>가 필요합니다{saved ? " (저장됨)" : ""}. dashboard.nodereal.io에 가입 → API Key 만들기 →
+        BSC 주소의 끝부분 키를 복사해 넣으세요. 키는 이 브라우저에만 저장됩니다.
+      </p>
+      <div className="flex gap-2">
+        <input className={input} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={saved ? "새 키로 바꾸려면 입력 (비우고 저장하면 지움)" : "NodeReal API 키"} />
+        <button
+          type="button"
+          className="shrink-0 rounded-lg border border-stone-300 px-3 dark:border-stone-700"
+          onClick={async () => {
+            await setSetting("noderealKey", key.trim());
+            setNodeRealKey(key.trim());
+            setKey("");
+          }}
+        >
+          저장
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EvmForm() {
   const [label, setLabel] = useState("내 지갑");
   const [address, setAddress] = useState("");
@@ -1189,6 +1217,7 @@ function EvmForm() {
           </label>
         ))}
       </div>
+      {chains.includes("bsc") && <NodeRealKey />}
       {notice && <p className="text-xs text-amber-700 dark:text-amber-400">{notice}</p>}
       <button className={button} disabled={!valid || chains.length === 0 || detecting}>
         추가

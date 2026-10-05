@@ -23,6 +23,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "plasma:0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", // USDT0 (이름을 USDT로 맞춤, lib/sources/evm.ts)
     "ton:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe", // TON USD₮
     "aptos:0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b", // Aptos USDt
+    "bsc:0x55d398326f99059ff775485246999027b3197955", // BSC-USD (테더 USDT)
   ]),
   USDC: new Set([
     "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -34,6 +35,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "sol:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     "avax:0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
     "aptos:0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
+    "bsc:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
   ]),
 };
 
@@ -42,7 +44,7 @@ function isImpersonatingStable(e: LedgerEntry) {
   const official = OFFICIAL_STABLES[e.asset.toUpperCase()];
   if (!official || e.origin === "exchange") return false;
   const [chain, contract] = e.assetKey.split(":");
-  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, avax: 1, plasma: 1, ton: 1, aptos: 1, tron: 1, sol: 1 })) return false;
+  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, avax: 1, plasma: 1, bsc: 1, ton: 1, aptos: 1, tron: 1, sol: 1 })) return false;
   return !official.has(e.assetKey);
 }
 
@@ -51,6 +53,7 @@ export const WRAPPED_NATIVE = new Set([
   "eth:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // WETH
   "avax:0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", // WAVAX
   "plasma:0x6100e367285b01f48d07953803a2d8dca5d19873", // WXPL
+  "bsc:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", // WBNB
   "arb:0x82af49447d8a07e3bd95bd0d56f35241523fbab1", // WETH
   "base:0x4200000000000000000000000000000000000006", // WETH
   "opt:0x4200000000000000000000000000000000000006", // WETH

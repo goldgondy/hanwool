@@ -145,7 +145,7 @@ export function exchangeIdOf(s: Source): string | null {
   return null;
 }
 
-export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon" | "avax" | "plasma";
+export type EvmChain = "eth" | "arb" | "base" | "opt" | "polygon" | "avax" | "plasma" | "bsc";
 
 export interface Holding {
   sourceId: string;
