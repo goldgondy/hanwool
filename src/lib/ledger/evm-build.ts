@@ -1,6 +1,6 @@
 import Decimal from "@/lib/decimal";
 import type { EvmChain, LedgerEntry } from "@/lib/db";
-import { EVM_CHAINS, evmAssetKey, fromBaseUnits, isFakeStable } from "@/lib/sources/evm";
+import { canonicalSymbol, EVM_CHAINS, evmAssetKey, fromBaseUnits, isFakeStable } from "@/lib/sources/evm";
 
 // Blockscout 응답을 정규화한 입력 형식. 금액은 모두 최소 단위(wei 등)의 정수 문자열이다.
 
@@ -121,7 +121,7 @@ export function buildEvmEntries(input: BuildInput): BuildResult {
       continue;
     }
     const amount = fromBaseUnits(t.value, t.decimals);
-    const symbol = (t.symbol ?? "UNKNOWN").toUpperCase();
+    const symbol = canonicalSymbol(chain, t.token, t.symbol);
     const key = evmAssetKey(chain, t.token);
     if (t.to.toLowerCase() === me && !amount.isZero()) received.add(key);
     if (t.from.toLowerCase() === me) {

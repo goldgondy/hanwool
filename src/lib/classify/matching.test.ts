@@ -97,6 +97,18 @@ describe("거래 번호로 짝짓기 (확정)", () => {
   });
 });
 
+describe("스팸 토큰", () => {
+  it("이름이 웹 주소인 에어드랍 토큰은 스팸으로 추정한다 (플라스마 실데이터: www.basex.cfd)", () => {
+    const v = run([chain({ sourceId: "w", asset: "WWW.BASEX.CFD", assetKey: "plasma:0x1234", amount: "1863", groupId: "plasma:0xabc", txHash: "c".repeat(64) })]);
+    expect([v[0].classification.category, v[0].classification.status]).toEqual(["spam", "suggested"]);
+  });
+
+  it("평범한 이름의 토큰 입금은 그대로 출처 확인 대상", () => {
+    const v = run([chain({ sourceId: "w", asset: "USDT", assetKey: "plasma:0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", amount: "58", groupId: "plasma:0xdef", txHash: "d".repeat(64) })]);
+    expect(v[0].classification.category).toBe("external_in");
+  });
+});
+
 describe("거래 번호 없이 수량·시각으로 짝짓기 (추정)", () => {
   const upbitOut = (p: Partial<LedgerEntry> = {}) =>
     ex({ sourceId: "upbit", location: "업비트", asset: "XRP", assetKey: "XRP", amount: "-1000", groupId: "up:wd", ...p });

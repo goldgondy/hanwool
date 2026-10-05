@@ -19,6 +19,8 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "base:0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
     "tron:TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     "sol:Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "avax:0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+    "plasma:0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", // USDT0 (이름을 USDT로 맞춤, lib/sources/evm.ts)
   ]),
   USDC: new Set([
     "eth:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -28,6 +30,7 @@ export const OFFICIAL_STABLES: Record<string, Set<string>> = {
     "base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     "tron:TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
     "sol:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "avax:0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
   ]),
 };
 
@@ -36,13 +39,15 @@ function isImpersonatingStable(e: LedgerEntry) {
   const official = OFFICIAL_STABLES[e.asset.toUpperCase()];
   if (!official || e.origin === "exchange") return false;
   const [chain, contract] = e.assetKey.split(":");
-  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, tron: 1, sol: 1 })) return false;
+  if (!contract || contract === "native" || !(chain in { eth: 1, arb: 1, opt: 1, polygon: 1, base: 1, avax: 1, plasma: 1, tron: 1, sol: 1 })) return false;
   return !official.has(e.assetKey);
 }
 
 // 네이티브 코인 래핑 컨트랙트 (소문자). assetKey 형식: `${chain}:${contract}`
 export const WRAPPED_NATIVE = new Set([
   "eth:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // WETH
+  "avax:0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", // WAVAX
+  "plasma:0x6100e367285b01f48d07953803a2d8dca5d19873", // WXPL
   "arb:0x82af49447d8a07e3bd95bd0d56f35241523fbab1", // WETH
   "base:0x4200000000000000000000000000000000000006", // WETH
   "opt:0x4200000000000000000000000000000000000006", // WETH
@@ -186,6 +191,10 @@ export function classifyGroup(key: string, entries: LedgerEntry[], ownAddresses:
       });
     if (selfSent) {
       return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "토큰 컨트랙트가 직접 보낸 토큰 (스팸 의심)" };
+    }
+    // R10c: 이름이 웹 주소인 토큰 (예: "www.basex.cfd") → 사기 사이트로 유도하는 에어드랍 스팸
+    if (outs.length === 0 && ins.every((e) => e.origin !== "exchange" && /(^www\.|https?:|\.(com|io|net|org|xyz|cfd|top|site|app|fi|vip|pro|cc|me|gift|claim)\b|t\.me\/)/i.test(e.asset))) {
+      return { ...base, category: "spam", status: "suggested", rule: "R10", reason: "이름이 웹 주소인 토큰 (사기 사이트 유도 스팸 의심)" };
     }
     // R10b: 주요 스테이블코인 이름인데 그 체인의 공식 컨트랙트가 아닌 토큰 → 사칭 토큰 의심 (주소 오염 사기에 흔함)
     if (outs.length === 0 && ins.every(isImpersonatingStable)) {

@@ -74,3 +74,11 @@
 `src/lib/ledger/xrp-build.ts`: 잔고 변화 방식. 실데이터 대사 `xrp.live.test.ts` (xrplcluster.com, 분당 1만 단위 호출 한도 → 기다렸다 재시도).
 - 아주 작은 XRP 입금(먼지 공격·스팸 메모)은 지금 '외부에서 받음'으로 들어간다. 금액이 작아 세액 영향은 없지만 검토 목록이 늘어난다 → 스팸 규칙 추가 검토.
 - 에스크로·결제 채널로 묶인 XRP는 잔고 대사 차이로 보일 수 있다 (경고 표시).
+
+## 8. 아발란체·플라스마 (Routescan) 확인 (2026-10-05)
+
+`src/lib/sources/evm.ts` (routescanGet·routescanAll), `src/lib/ledger/routescan.live.test.ts`.
+- 아발란체: 실데이터 대사 AVAX·USDT 모두 일치.
+- **플라스마: Routescan 색인이 약 4일 뒤처짐** (보낸 거래 5건 중 3건만 조회됨). 동기화 때 지연 시간을 재서 경고한다.
+  대안: Etherscan V2(chainid 9745, 무료 키 필요 여부 확인) 또는 노드의 eth_getLogs로 USDT0 전송을 직접 읽어 보완.
+- 플라스마 USDT0는 이름을 USDT로 맞춘다 (거래소 출금 "USDT (Plasma)"와 짝짓기 위해).

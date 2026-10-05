@@ -10,7 +10,7 @@ import type { TaxEvent } from "./engine";
 // - 그룹 안에서 풀별 순수량으로 판단하므로, 내 계정으로 되돌아온 부분은 자연히 상쇄된다.
 // - 법정화폐(원화 등)는 원가 풀이 아니다. 원화 매수·매도에서는 실제 지불·수령한 원화(수수료 포함)가 취득가·양도가다.
 
-const POOL_ALIASES: Record<string, string> = { WETH: "ETH", WPOL: "POL", WMATIC: "POL", MATIC: "POL" };
+const POOL_ALIASES: Record<string, string> = { WETH: "ETH", WPOL: "POL", WMATIC: "POL", MATIC: "POL", WAVAX: "AVAX", WXPL: "XPL" };
 export const poolOf = (symbol: string) => POOL_ALIASES[symbol.toUpperCase()] ?? symbol.toUpperCase();
 
 // 의제취득가 기준 시점의 시세 조회 시각 (2026-12-31 24:00 KST 직전)

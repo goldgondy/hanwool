@@ -1,5 +1,5 @@
 import { db, type EvmChain, type EvmSource } from "@/lib/db";
-import { EVM_CHAINS, blockscoutPages, evmRpc, evmAssetKey } from "@/lib/sources/evm";
+import { EVM_CHAINS, blockscoutPages, evmRpc, evmAssetKey, routescanAll, routescanLagHours } from "@/lib/sources/evm";
 import {
   buildEvmEntries,
   type InternalTx,
@@ -70,6 +70,7 @@ export async function fetchChainHistory(
   onProgress: (msg: string) => void = () => {},
 ): Promise<{ txs: NativeTx[]; internal: InternalTx[]; tokens: TokenTransfer[]; maxBlock: number }> {
   const { name } = EVM_CHAINS[chain];
+  if (EVM_CHAINS[chain].routescan) return fetchRoutescanHistory(address, chain, fromBlock, onProgress);
   // 최신 항목부터 오므로, 이미 가져온 블록보다 이전 항목이 나오면 멈춘다.
   // 마지막 블록은 다시 가져오며, 항목 ID가 결정적이라 중복되지 않는다.
   const stop = (x: { block_number?: number; block?: number }) => blockOf(x) < fromBlock;
@@ -122,6 +123,97 @@ export async function fetchChainHistory(
   };
 }
 
+// Routescan(Etherscan 형식) 응답
+interface RsTx {
+  blockNumber: string;
+  timeStamp: string;
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  gasUsed: string;
+  gasPrice: string;
+  isError: string;
+  txreceipt_status?: string;
+}
+interface RsInternal {
+  blockNumber: string;
+  timeStamp: string;
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  isError: string;
+  traceId?: string;
+}
+interface RsToken {
+  blockNumber: string;
+  timeStamp: string;
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  contractAddress: string;
+  tokenSymbol: string;
+  tokenDecimal: string;
+}
+
+// 아발란체·플라스마: Routescan에서 오래된 순으로 읽는다. 토큰 전송에 로그 번호가 없어 같은 트랜잭션 안의 순서로 번호를 붙인다.
+async function fetchRoutescanHistory(address: string, chain: EvmChain, fromBlock: number, onProgress: (msg: string) => void) {
+  const { name } = EVM_CHAINS[chain];
+  onProgress(`${name}: 트랜잭션 조회 중`);
+  const txs = await routescanAll<RsTx>(chain, "txlist", address, fromBlock, (t) => t.hash);
+  onProgress(`${name}: 내부 트랜잭션 조회 중`);
+  const internal = await routescanAll<RsInternal>(chain, "txlistinternal", address, fromBlock, (t) => `${t.hash}:${t.traceId ?? ""}:${t.from}:${t.to}:${t.value}`);
+  onProgress(`${name}: 토큰 전송 조회 중`);
+  const tokens = await routescanAll<RsToken>(chain, "tokentx", address, fromBlock, (t) => `${t.hash}:${t.contractAddress}:${t.from}:${t.to}:${t.value}`);
+
+  const seq = new Map<string, number>();
+  const nth = (hash: string) => {
+    const n = seq.get(hash) ?? 0;
+    seq.set(hash, n + 1);
+    return n;
+  };
+  return {
+    maxBlock: [...txs, ...internal, ...tokens].reduce((m, x) => Math.max(m, Number(x.blockNumber)), fromBlock),
+    txs: txs.map(
+      (t): NativeTx => ({
+        hash: t.hash,
+        from: t.from,
+        to: t.to || null,
+        value: t.value || "0",
+        fee: (BigInt(t.gasUsed || "0") * BigInt(t.gasPrice || "0")).toString(),
+        success: t.isError === "0" && t.txreceipt_status !== "0",
+        time: Number(t.timeStamp) * 1000,
+      }),
+    ),
+    internal: internal.map(
+      (t): InternalTx => ({
+        hash: t.hash,
+        index: nth(`int:${t.hash}`),
+        from: t.from,
+        to: t.to || null,
+        value: t.value || "0",
+        success: t.isError === "0",
+        time: Number(t.timeStamp) * 1000,
+      }),
+    ),
+    tokens: tokens.map(
+      (t): TokenTransfer => ({
+        hash: t.hash,
+        logIndex: nth(`log:${t.hash}`),
+        from: t.from,
+        to: t.to,
+        value: t.value || "0",
+        decimals: t.tokenDecimal !== "" && t.tokenDecimal != null ? Number(t.tokenDecimal) : null,
+        token: t.contractAddress,
+        symbol: t.tokenSymbol || null,
+        time: Number(t.timeStamp) * 1000,
+      }),
+    ),
+  };
+}
+
 async function syncChain(
   source: EvmSource,
   chain: EvmChain,
@@ -134,6 +226,10 @@ async function syncChain(
   const fromBlock = Number((await db.syncState.get(stateKey))?.cursor ?? 0);
 
   const { txs, internal, tokens, maxBlock } = await fetchChainHistory(address, chain, fromBlock, onProgress);
+  if (EVM_CHAINS[chain].routescan) {
+    const lag = await routescanLagHours(chain);
+    if (lag !== null && lag >= 0.5) warnings.push(`${name}: 조회 서버(Routescan)가 최근 약 ${lag < 48 ? `${Math.round(lag)}시간` : `${Math.round(lag / 24)}일`} 기록을 아직 반영하지 않았습니다. 그 사이의 거래가 빠져 잔고 대조에서 차이가 날 수 있으니 나중에 다시 동기화하세요.`);
+  }
   // 이미 받은 적 있는 토큰 (가짜 전송 판별용)
   const knownTokens = new Set<string>();
   for (const e of await db.ledger.where("sourceId").equals(source.id).toArray()) {

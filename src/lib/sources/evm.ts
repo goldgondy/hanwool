@@ -1,5 +1,5 @@
 import Decimal from "@/lib/decimal";
-import type { EvmChain, EvmSource } from "@/lib/db";
+import { db, type EvmChain, type EvmSource } from "@/lib/db";
 import type { RawBalance } from "@/lib/sources/types";
 import { OFFICIAL_STABLES } from "@/lib/classify/classifier";
 
@@ -8,19 +8,95 @@ import { OFFICIAL_STABLES } from "@/lib/classify/classifier";
 // - 공개 인스턴스는 요청 속도 제한이 있어 429 응답 시 재시도한다.
 // - 잔고·nonce용 JSON-RPC(rpc): Base·Optimism의 Blockscout RPC는 결과를 주지 않거나 30초 넘게 걸려(2026-10-01 확인)
 //   각 체인의 공식 공개 RPC를 쓴다.
+// - Blockscout가 없는 체인(아발란체·플라스마)은 Routescan의 Etherscan 형식 공개 API(키 없음, CORS 허용)를 쓴다 (routescan = 체인 ID).
 export const EVM_CHAINS: Record<
   EvmChain,
-  { name: string; native: string; blockscout: string; rpc: string; explorer: string }
+  { name: string; native: string; blockscout: string; rpc: string; explorer: string; routescan?: number }
 > = {
   eth: { name: "Ethereum", native: "ETH", blockscout: "https://eth.blockscout.com", rpc: "https://eth.blockscout.com/api/eth-rpc", explorer: "https://etherscan.io" },
   arb: { name: "Arbitrum", native: "ETH", blockscout: "https://arbitrum.blockscout.com", rpc: "https://arbitrum.blockscout.com/api/eth-rpc", explorer: "https://arbiscan.io" },
   base: { name: "Base", native: "ETH", blockscout: "https://base.blockscout.com", rpc: "https://mainnet.base.org", explorer: "https://basescan.org" },
   opt: { name: "Optimism", native: "ETH", blockscout: "https://optimism.blockscout.com", rpc: "https://mainnet.optimism.io", explorer: "https://optimistic.etherscan.io" },
   polygon: { name: "Polygon", native: "POL", blockscout: "https://polygon.blockscout.com", rpc: "https://polygon.blockscout.com/api/eth-rpc", explorer: "https://polygonscan.com" },
+  avax: { name: "Avalanche", native: "AVAX", blockscout: "", rpc: "https://api.avax.network/ext/bc/C/rpc", explorer: "https://snowtrace.io", routescan: 43114 },
+  plasma: { name: "Plasma", native: "XPL", blockscout: "", rpc: "https://rpc.plasma.to", explorer: "https://plasmascan.to", routescan: 9745 },
 };
 
 export function evmAssetKey(chain: EvmChain, contract: string | null) {
   return `${chain}:${contract ? contract.toLowerCase() : "native"}`;
+}
+
+// 공식 스테이블코인인데 이름이 다른 토큰은 같은 이름으로 맞춘다 (가격·짝짓기·사칭 판별이 이름으로 이뤄지므로).
+// 예: 플라스마의 USDT0 = 테더가 발행한 USDT. 거래소는 "USDT (Plasma 네트워크)"로 출금한다.
+const CANONICAL_SYMBOL: Record<string, string> = {
+  "plasma:0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb": "USDT",
+};
+export function canonicalSymbol(chain: EvmChain, contract: string, symbol: string | null) {
+  return CANONICAL_SYMBOL[evmAssetKey(chain, contract)] ?? (symbol ?? "UNKNOWN").toUpperCase();
+}
+
+// ── Routescan (Etherscan 형식) ──
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function routescanGet<T>(chain: EvmChain, params: Record<string, string>): Promise<T[]> {
+  const id = EVM_CHAINS[chain].routescan!;
+  const url = `https://api.routescan.io/v2/network/mainnet/evm/${id}/etherscan/api?${new URLSearchParams(params)}`;
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    } catch (e) {
+      const timedOut = e instanceof Error && e.name === "TimeoutError";
+      throw new Error(`${EVM_CHAINS[chain].name} 조회 ${timedOut ? "시간 초과" : "실패"} (공개 서버가 응답하지 않습니다)`);
+    }
+    if (res.status === 429 && attempt < 5) {
+      await sleep(1000 * 2 ** attempt);
+      continue;
+    }
+    if (!res.ok) throw new Error(`${EVM_CHAINS[chain].name} 조회 실패 (HTTP ${res.status})`);
+    const body = (await res.json()) as { status: string; message: string; result: T[] | string | null };
+    if (Array.isArray(body.result)) return body.result;
+    const text = `${body.message} ${body.result ?? ""}`;
+    if (/no (transactions|records) found/i.test(text)) return [];
+    if (/rate limit/i.test(text) && attempt < 5) {
+      await sleep(1000 * 2 ** attempt);
+      continue;
+    }
+    throw new Error(`${EVM_CHAINS[chain].name} 조회 실패 (${text.trim()})`);
+  }
+}
+
+// 조회 서버가 얼마나 뒤처졌는지 (시간). 그 체인의 공식 USDT(거래가 가장 많은 토큰)의 가장 최근 전송 시각으로 잰다.
+// 2026-10-05 플라스마는 약 4일 뒤처져 최근 거래가 빠졌다. 잴 수 없으면 null.
+const BUSY_TOKEN: Partial<Record<EvmChain, string>> = {
+  avax: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7",
+  plasma: "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb",
+};
+export async function routescanLagHours(chain: EvmChain): Promise<number | null> {
+  const token = BUSY_TOKEN[chain];
+  if (!token) return null;
+  try {
+    const [last] = await routescanGet<{ timeStamp: string }>(chain, { module: "account", action: "tokentx", contractaddress: token, page: "1", offset: "1", sort: "desc" });
+    return last ? (Date.now() / 1000 - Number(last.timeStamp)) / 3600 : null;
+  } catch {
+    return null;
+  }
+}
+
+// 블록 순서(오래된 것부터)로 모든 기록을 읽는다. 한 번에 1000건, 다 차면 마지막 블록부터 다시 읽고 중복은 key로 뺀다.
+export async function routescanAll<T extends { blockNumber: string }>(chain: EvmChain, action: string, address: string, fromBlock: number, key: (x: T) => string): Promise<T[]> {
+  const out = new Map<string, T>();
+  let start = fromBlock;
+  for (;;) {
+    const rows = await routescanGet<T>(chain, { module: "account", action, address, startblock: String(start), endblock: "999999999", page: "1", offset: "1000", sort: "asc" });
+    for (const r of rows) out.set(key(r), r);
+    await sleep(250); // 공개 API 호출 간격
+    if (rows.length < 1000) break;
+    const last = Number(rows[rows.length - 1].blockNumber);
+    if (last === start) break; // 한 블록에 1000건 넘게 있는 극단적인 경우
+    start = last;
+  }
+  return [...out.values()];
 }
 
 // 체인별 공식 USDT·USDC가 아닌데 이름이 USDT·USDC인 토큰 (주소 오염·사칭 스팸)
@@ -109,6 +185,32 @@ export async function blockscoutPages<T>(
   return out;
 }
 
+// Routescan 체인: 토큰 목록은 원장에서 받은 적 있는 토큰으로, 수량은 노드에 직접 묻는다
+async function fetchRoutescanChain(address: string, chain: EvmChain, sourceId: string): Promise<RawBalance[]> {
+  const { name, native } = EVM_CHAINS[chain];
+  const out: RawBalance[] = [];
+  const nativeHex = await evmRpc<string>(chain, "eth_getBalance", [address, "latest"]);
+  if (nativeHex === null) throw new Error(`${name} 잔고 조회 실패 (노드가 응답하지 않습니다)`);
+  const nativeAmount = fromBaseUnits(nativeHex, 18);
+  if (!nativeAmount.isZero()) out.push({ location: name, asset: native, rawAsset: native, assetKey: evmAssetKey(chain, null), amount: nativeAmount });
+  const tokens = new Map<string, string>();
+  for (const e of await db.ledger.where("sourceId").equals(sourceId).toArray()) {
+    const [c, contract] = e.assetKey.split(":");
+    if (c === chain && contract !== "native") tokens.set(contract, e.asset);
+  }
+  const balanceOf = "0x70a08231" + address.slice(2).toLowerCase().padStart(64, "0");
+  for (const [contract, symbol] of tokens) {
+    const [raw, dec] = await Promise.all([
+      evmRpc<string>(chain, "eth_call", [{ to: contract, data: balanceOf }, "latest"]),
+      evmRpc<string>(chain, "eth_call", [{ to: contract, data: "0x313ce567" }, "latest"]),
+    ]);
+    if (!raw || raw === "0x" || !dec || dec === "0x") continue;
+    const amount = fromBaseUnits(raw, parseInt(dec, 16));
+    if (!amount.isZero()) out.push({ location: name, asset: symbol, rawAsset: contract, assetKey: evmAssetKey(chain, contract), amount });
+  }
+  return out;
+}
+
 async function fetchChain(address: string, chain: EvmChain): Promise<RawBalance[]> {
   const { name, native } = EVM_CHAINS[chain];
   const out: RawBalance[] = [];
@@ -142,7 +244,7 @@ async function fetchChain(address: string, chain: EvmChain): Promise<RawBalance[
     if (amount.isZero()) continue;
     out.push({
       location: name,
-      asset: (t.token.symbol ?? "UNKNOWN").toUpperCase(),
+      asset: canonicalSymbol(chain, contract, t.token.symbol),
       rawAsset: contract,
       assetKey: evmAssetKey(chain, contract),
       amount,
@@ -160,6 +262,16 @@ export async function detectActiveChains(address: string): Promise<{ chain: EvmC
   return Promise.all(
     (Object.keys(EVM_CHAINS) as EvmChain[]).map(async (chain) => {
       try {
+        if (EVM_CHAINS[chain].routescan) {
+          const [nonce, bal, tokens] = await Promise.all([
+            evmRpc<string>(chain, "eth_getTransactionCount", [address, "latest"]),
+            evmRpc<string>(chain, "eth_getBalance", [address, "latest"]),
+            routescanGet(chain, { module: "account", action: "tokentx", address, page: "1", offset: "1", sort: "desc" }),
+          ]);
+          if (nonce === null && bal === null) return { chain, status: "unknown" as const };
+          const active = (nonce !== null && parseInt(nonce, 16) > 0) || (bal !== null && BigInt(bal) > BigInt(0)) || tokens.length > 0;
+          return { chain, status: active ? ("active" as const) : ("inactive" as const) };
+        }
         const [info, nonce] = await Promise.all([
           blockscoutGet<{ coin_balance: string | null; has_tokens?: boolean; has_token_transfers?: boolean } | null>(
             chain,
@@ -179,6 +291,6 @@ export async function detectActiveChains(address: string): Promise<{ chain: EvmC
 }
 
 export async function fetchEvmBalances(source: EvmSource): Promise<RawBalance[]> {
-  const results = await Promise.all(source.chains.map((c) => fetchChain(source.address, c)));
+  const results = await Promise.all(source.chains.map((c) => (EVM_CHAINS[c].routescan ? fetchRoutescanChain(source.address, c, source.id) : fetchChain(source.address, c))));
   return results.flat();
 }

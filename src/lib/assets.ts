@@ -17,4 +17,6 @@ export const PRICE_ALIASES: Record<string, string> = {
   WPOL: "POL",
   MATIC: "POL",
   WMATIC: "POL",
+  WAVAX: "AVAX",
+  WXPL: "XPL",
 };
