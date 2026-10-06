@@ -307,6 +307,7 @@ interface Side {
   sources: Set<string>;
   hasHash: boolean;
   location: string;
+  onChain: boolean; // 블록체인 기록만으로 이뤄진 쪽 (브리지 판단용)
 }
 
 function sideOf(view: GroupView, dir: "out" | "in"): Side | null {
@@ -324,6 +325,7 @@ function sideOf(view: GroupView, dir: "out" | "in"): Side | null {
     sources: new Set(legs.map((e) => e.sourceId)),
     hasHash: legs.some((e) => !!e.txHash),
     location: legs[0].location,
+    onChain: legs.every((e) => e.origin !== "exchange" && e.origin !== "manual"), // 지갑 빌더는 origin을 비워 두기도 한다
   };
 }
 
@@ -333,8 +335,11 @@ export function matchUnhashedTransfers(views: GroupView[]) {
   const candidates: { out: Side; in: Side; diff: Decimal; gap: number }[] = [];
   for (const o of outs) {
     for (const i of ins) {
-      if (o.symbol !== i.symbol || [...o.sources].some((s) => i.sources.has(s))) continue;
-      if (o.hasHash && i.hasHash) continue; // 둘 다 거래 번호가 있는데 다르면 다른 이동이다
+      if (o.symbol !== i.symbol) continue;
+      // 같은 계정끼리는 짝짓지 않는다. 단, 같은 지갑이 체인을 옮긴 브리지(예: 이더리움 → 아비트럼)는 체인이 달라 거래 번호가 달라도 짝짓는다.
+      const bridge = o.onChain && i.onChain && o.location !== i.location;
+      if ([...o.sources].some((s) => i.sources.has(s)) && !bridge) continue;
+      if (o.hasHash && i.hasHash && !bridge) continue; // 둘 다 거래 번호가 있는데 다르면 다른 이동이다 (브리지는 체인마다 거래 번호가 따로 생긴다)
       const gap = i.view.time - o.view.time;
       if (gap < -PAIR_BEFORE_MS || gap > PAIR_AFTER_MS) continue;
       const short = o.qty.minus(i.qty);
@@ -354,7 +359,7 @@ export function matchUnhashedTransfers(views: GroupView[]) {
     o.view.classification = {
       ...base,
       key: o.view.key,
-      reason: `${i.location}의 입금 ${i.qty.toString()} ${i.symbol}과(와) 수량·시각이 맞아 내 계정 간 이체로 보임 (${hours}시간 뒤 입금${short.isZero() ? "" : `, 차이 ${short.toString()}은 이체 수수료로 봄`})`,
+      reason: `${i.location}의 입금 ${i.qty.toString()} ${i.symbol}과(와) 수량·시각이 맞아 ${o.onChain && i.onChain && o.location !== i.location ? "체인 간 브리지(내 계정 간 이체)로" : "내 계정 간 이체로"} 보임 (${hours}시간 뒤 입금${short.isZero() ? "" : `, 차이 ${short.toString()}은 이체 수수료로 봄`})`,
       pair: { key: i.view.key, ...(short.isZero() ? {} : { feeAsset: o.symbol, feeQty: short.toString() }) },
     };
     i.view.classification = {
