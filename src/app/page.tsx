@@ -222,6 +222,7 @@ export default function Home() {
           <h2 className="font-semibold">도구</h2>
           <ul className="space-y-2">
             {[
+              ["/calculator", "간이 계산기", "합계 금액만 넣어 2027년 세금 어림하기", "가입 없이"],
               ["/plan", "절세 도구", "연말 손실 정리, 남은 공제, 세금이 적은 매도 순서", "절세"],
               ["/foreign", "해외계좌 신고 확인", "해외 거래소 월말 잔고가 5억원을 넘었는지", "6월 신고"],
               ["/ledger", "거래 원장", "계정별 모든 입출금·거래 기록", ""],

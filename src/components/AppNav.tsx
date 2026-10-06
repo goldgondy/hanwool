@@ -26,6 +26,7 @@ const STEPS: Item[] = [
 ];
 
 const TOOLS: Item[] = [
+  { href: "/calculator", label: "간이 계산기" },
   { href: "/plan", label: "절세 도구" },
   { href: "/derivatives", label: "선물 손익" },
   { href: "/foreign", label: "해외계좌 신고" },
