@@ -33,6 +33,7 @@ const TOOLS: Item[] = [
   { href: "/snapshots", label: "보유 기록" },
   { href: "/ledger", label: "거래 원장" },
   { href: "/backup", label: "백업·복원" },
+  { href: "/pricing", label: "요금제" },
 ];
 
 function isActive(pathname: string, href: string) {
