@@ -103,7 +103,7 @@ export default function ForeignPage() {
       />
 
       <Card className="flex flex-wrap items-center gap-3">
-        <select className={`${inputCls} w-auto`} value={year} onChange={(e) => setYear(Number(e.target.value))}>
+        <select className={inputCls.replace("w-full", "w-auto")} value={year} onChange={(e) => setYear(Number(e.target.value))}>
           {[thisYear, thisYear - 1, thisYear - 2].map((y) => (
             <option key={y} value={y}>
               {y}년 ({y + 1}년 6월 신고분)

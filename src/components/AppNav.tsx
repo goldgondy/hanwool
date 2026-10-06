@@ -27,6 +27,7 @@ const STEPS: Item[] = [
 
 const TOOLS: Item[] = [
   { href: "/plan", label: "절세 도구" },
+  { href: "/derivatives", label: "선물 손익" },
   { href: "/foreign", label: "해외계좌 신고" },
   { href: "/snapshots", label: "보유 기록" },
   { href: "/ledger", label: "거래 원장" },

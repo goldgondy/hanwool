@@ -28,7 +28,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "전체" },
 ];
 
-const input = `${inputCls} w-auto py-1.5`;
+const input = `${inputCls.replace("w-full", "w-auto")} py-1.5`;
 
 function txUrl(groupKey: string) {
   const [chain, hash] = groupKey.split(":");
