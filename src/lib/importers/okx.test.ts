@@ -128,3 +128,30 @@ describe("OKX 입금·출금 내역 파일", () => {
     expect(ids(b)).toEqual(ids(a));
   });
 });
+
+// 2026-10-06 세무사 제공 OKX 입금 내역 파일 (기록 없음) + 같은 형식의 예시 행. 파일 이름에 "(GMT+9)" 시간대가 붙어 있다.
+const DEP = [
+  "UID: 600000000000000000,Account type: Main,Time: 10/06/2026 11:00",
+  "",
+  "Time,Crypto,Deposit address,Network,Transaction ID,Amount,Status",
+];
+
+describe("OKX 입금 내역 파일", () => {
+  it("실제 파일(기록 없음)을 입금 내역으로 알아본다", () => {
+    const found = detect(DEP.join("\n"));
+    expect(found.adapter?.id).toBe("okx-deposit-withdrawal-v1");
+    if (!found.adapter) throw new Error("not detected");
+    expect(found.adapter.parts?.(found.table)).toEqual(["okx:deposit"]);
+    expect(found.adapter.convert(found.table, "s").entries).toEqual([]);
+  });
+
+  it("파일 이름의 (GMT+9)로 한국 시각을 읽고, 입금 주소(내 주소)는 상대방으로 남기지 않는다", () => {
+    const found = detect([...DEP, "05/12/2026 10:00:00,USDT,TXmyOKXdeposit,TRC20,ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34,100,Completed"].join("\n"));
+    if (!found.adapter) throw new Error("not detected");
+    const table = { ...found.table, preamble: [...(found.table.preamble ?? []), "file: OKX_deposit_history_20261006110016(GMT+9)_1039e23e.csv"] };
+    const r = found.adapter.convert(table, "s");
+    expect(r.entries.map((e) => [e.kind, e.asset, e.amount, e.counterparty])).toEqual([["transfer", "USDT", "100", undefined]]);
+    expect(new Date(r.entries[0].time).toISOString()).toBe("2026-05-12T01:00:00.000Z");
+    expect(r.warnings.join(" ")).not.toContain("시간대가 없어");
+  });
+});

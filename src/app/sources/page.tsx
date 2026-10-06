@@ -650,7 +650,9 @@ function CsvImportCard() {
     try {
       const found = isXlsx(buf) ? detectRows(await readXlsxRows(buf)) : detect(decodeText(buf));
       if (!found.adapter) return { fileName: file.name, message: "지원하지 않는 형식입니다.", headers: found.headers };
-      return makePreview(file.name, found.adapter, found.table);
+      // 파일 이름에도 정보가 있다 (예: OKX "(GMT+9)" 시간대)
+      const table = { ...found.table, preamble: [...(found.table.preamble ?? []), `file: ${file.name}`] };
+      return makePreview(file.name, found.adapter, table);
     } catch (e) {
       return { fileName: file.name, message: `읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}` };
     }

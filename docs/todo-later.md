@@ -56,7 +56,7 @@
 
 거래 계정 내역 형식은 세무사 제공 캡처로 맞췄다 (`src/lib/importers/okx.ts`). 남은 확인:
 - 출금 내역 파일은 캡처로 맞춤 (`okxTransfers`, Amount = 수수료 뺀 보낸 금액, 시간대 미표기 → UTC+8 가정).
-- **입금 내역 파일 샘플**: 열 이름(주소·거래 번호 열), 상태 이름. 지금은 출금 파일과 같은 열이라고 가정.
+- 입금 내역 파일 확인 (2026-10-06): 열 = Time·Crypto·Deposit address·Network·Transaction ID·Amount·Status (수수료 열 없음). 내려받은 시간대는 **파일 이름**에 "(GMT+9)"처럼 붙는다 → 가져오기 화면이 파일 이름을 함께 넘겨 읽는다. 입금 기록이 있는 파일로 상태 이름(Completed 등)만 남은 확인.
 - 전환(Convert)·Earn 기록이 어느 파일에 나오는지.
 - 원본 CSV의 시각에 초가 있는지 (엑셀 표시는 분까지).
 - 거래 계정 파일과 OKX API를 ‘같은 계정’으로 묶으면, 파일 기간에는 API의 거래 계정 항목만 빠지고 자금 계정 입출금은 남는다 (`src/lib/ledger/dedup.ts`).

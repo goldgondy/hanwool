@@ -33,10 +33,11 @@ function num(s: string | undefined): Decimal | null {
 
 const sig = (d: Decimal | null) => (d ? d.toSignificantDigits(6).toString() : "");
 
-// 첫 줄의 "Time Zone:UTC+8" → 분 단위 시차. 없으면 null (OKX 기본값 UTC+8로 본다)
+// 첫 줄의 "Time Zone:UTC+8" 또는 파일 이름의 "(GMT+9)" → 분 단위 시차. 없으면 null (OKX 기본값 UTC+8로 본다)
+// (가져오기 화면이 파일 이름을 preamble 끝에 붙여 준다)
 export function okxOffsetMinutes(preamble: string[] | undefined): number | null {
-  const m = (preamble ?? []).join(" ").match(/UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?/i);
-  if (!m) return /UTC(?![+-\d])/i.test((preamble ?? []).join(" ")) ? 0 : null;
+  const m = (preamble ?? []).join(" ").match(/(?:UTC|GMT)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?/i);
+  if (!m) return /(?:UTC|GMT)(?![+-\d])/i.test((preamble ?? []).join(" ")) ? 0 : null;
   return (m[1] === "-" ? -1 : 1) * (+m[2] * 60 + +(m[3] ?? 0));
 }
 
@@ -230,7 +231,8 @@ export const okxTransfers: CsvAdapter = {
       const key = rowKey([out ? "out" : "in", coin, network, address ?? "", txHash ?? "", sig(amount.abs()), sig(fee), txHash ? "" : String(Math.floor(time / 60_000))], seen);
       const id = `${sourceId}:file:${key}`;
       const groupId = `okx:file:${out ? "wd" : "dep"}:${key}`;
-      const base = { sourceId, origin: "exchange" as const, location: "OKX 펀딩 계정", time, asset: coin, assetKey: coin, groupId, txHash, counterparty: address };
+      // 입금 파일의 주소 칸은 내 OKX 입금 주소라 상대방이 아니다 (출금만 받는 주소를 상대방으로 남긴다)
+      const base = { sourceId, origin: "exchange" as const, location: "OKX 펀딩 계정", time, asset: coin, assetKey: coin, groupId, txHash, counterparty: out ? address : undefined };
       if (out) {
         entries.push({ ...base, id: `${id}:out`, amount: amount.abs().neg().toString(), kind: "transfer", rawType: `Withdrawal (${network})` });
         if (fee && !fee.isZero()) entries.push({ ...base, id: `${id}:fee`, amount: fee.neg().toString(), kind: "fee", rawType: "Withdrawal fee" });
