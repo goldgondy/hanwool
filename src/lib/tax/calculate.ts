@@ -2,6 +2,7 @@ import Decimal from "@/lib/decimal";
 import { loadClassifiedGroups } from "@/lib/classify/load";
 import { buildTaxEvents, DEEMED_PRICE_TIME, poolOf, priceKey, priceQueries, type BuildEventsResult } from "@/lib/tax/build-events";
 import { DEFAULT_POLICY, runEngine, type EngineResult } from "@/lib/tax/engine";
+import { unmatchedCounterfactual } from "@/lib/tax/matching-value";
 
 // 원장 + 분류 → 시세 조회 → 세금 계산. 세금 계산 화면과 절세 도구가 함께 쓴다.
 
@@ -14,6 +15,8 @@ export interface Report {
   priceCount: number;
   // 업비트·바이낸스에 없어 보조 출처(OKX·MEXC·게이트·CoinGecko) 시세를 쓴 코인과 그 출처
   fallbackPriced: { symbol: string; via: string }[];
+  // 매칭으로 줄인 세금: 짝지은 이체 수와, 짝짓지 않았다면 냈을 연도별 세액 (lib/tax/matching-value.ts)
+  matching: { matched: number; years: { year: number; actual: Decimal; unmatched: Decimal }[] };
 }
 
 // vias: 넘기면 조회 키별 시세 출처를 채운다
@@ -42,7 +45,11 @@ export async function calculate(mode: Mode, onProgress: (m: string) => void = ()
   onProgress("분류 불러오는 중");
   const groups = await loadClassifiedGroups();
 
+  // 짝짓지 않았다고 가정한 분류도 같은 시세로 계산하므로 시세 조회 목록을 합친다
+  const counterfactual = unmatchedCounterfactual(groups);
   const queries = priceQueries(groups);
+  const seen = new Set(queries.map((q) => priceKey(q.symbol, q.time)));
+  for (const q of priceQueries(counterfactual.groups)) if (!seen.has(priceKey(q.symbol, q.time))) queries.push(q);
   if (mode === "actual") {
     // 의제취득가용 2026년 말 시세
     const pools = new Set(groups.flatMap((g) => (g.classification.category === "spam" ? [] : g.entries.map((e) => poolOf(e.asset)))));
@@ -61,8 +68,13 @@ export async function calculate(mode: Mode, onProgress: (m: string) => void = ()
   const prices2026: Record<string, Decimal | undefined> = {};
   for (const p of built.pools) prices2026[p] = prices.get(priceKey(p, DEEMED_PRICE_TIME)) ?? undefined;
 
-  const engine = runEngine(built.events, prices2026, DEFAULT_POLICY, mode === "simulate" ? { taxStart: 0, applyDeemed: false } : {});
-  return { mode, engine, built, priceCount: queries.length, fallbackPriced: [...fallback].map(([symbol, via]) => ({ symbol, via })) };
+  const options = mode === "simulate" ? { taxStart: 0, applyDeemed: false } : {};
+  const engine = runEngine(built.events, prices2026, DEFAULT_POLICY, options);
+  const naive = runEngine(buildTaxEvents(counterfactual.groups, prices).events, prices2026, DEFAULT_POLICY, options);
+  const years = [...new Set([...engine.years, ...naive.years].map((y) => y.year))].sort((a, b) => a - b);
+  const taxIn = (r: EngineResult, y: number) => r.years.find((x) => x.year === y)?.totalTaxKrw ?? new Decimal(0);
+  const matching = { matched: counterfactual.matched, years: years.map((year) => ({ year, actual: taxIn(engine, year), unmatched: taxIn(naive, year) })) };
+  return { mode, engine, built, priceCount: queries.length, fallbackPriced: [...fallback].map(([symbol, via]) => ({ symbol, via })), matching };
 }
 
 // 현재 원화 시세 (업비트 현재가, 없으면 바이낸스 × 환율)

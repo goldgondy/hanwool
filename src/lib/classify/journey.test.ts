@@ -253,3 +253,20 @@ describe("까다로운 경우", () => {
     expect(groups[0].classification.category).toBe("external_out");
   });
 });
+
+describe("매칭으로 줄인 세금", () => {
+  it("짝짓지 않았다면 이체마다 양도·취득가 0원이 되어 세금이 훨씬 많다", async () => {
+    const { unmatchedCounterfactual } = await import("@/lib/tax/matching-value");
+    const entries = ledger();
+    const groups = classifyAll({ entries, ownAddresses: new Set([BTC_ME, BTC_CHANGE, TRON_ME, EVM_A, EVM_B, XRP_ME]), decisions: new Map() });
+    const cf = unmatchedCounterfactual(groups);
+    expect(cf.matched).toBe(8); // H1~H6 6건 + 수량·시각 짝 2건
+    const P: Record<string, number> = { BTC: 100_000_000, USDT: 1_400, ETH: 5_000_000, XRP: 3_000 };
+    const prices = new Map<string, Decimal | null>();
+    for (const q of [...priceQueries(groups), ...priceQueries(cf.groups)]) prices.set(priceKey(q.symbol, q.time), new Decimal(P[q.symbol] ?? 0));
+    const tax = (gs: typeof groups) => runEngine(buildTaxEvents(gs, prices).events, {}).years.reduce((s, y) => s.plus(y.totalTaxKrw), new Decimal(0));
+    const actual = tax(groups);
+    const unmatched = tax(cf.groups);
+    expect(unmatched.gt(actual)).toBe(true);
+  });
+});

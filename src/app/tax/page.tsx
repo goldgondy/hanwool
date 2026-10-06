@@ -153,6 +153,32 @@ export default function TaxPage() {
             </Callout>
           )}
 
+          {(() => {
+            const saved = report.matching.years.reduce((acc, y) => acc.plus(y.unmatched.minus(y.actual)), new Decimal(0));
+            if (report.matching.matched === 0 || !saved.gt(0)) return null;
+            return (
+              <section className="space-y-3 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 p-5 text-white shadow-sm">
+                <div>
+                  <p className="text-sm text-emerald-50">매칭으로 줄인 세금{report.mode === "simulate" && " (모의)"}</p>
+                  <p className="text-3xl font-bold tabular-nums">{formatKrw(saved.toFixed(0))}</p>
+                  <p className="mt-1 text-sm leading-6 text-emerald-50">
+                    계정 사이 이체 <b>{report.matching.matched}건</b>을 내 계정 간 이체로 이어 붙였습니다. 짝을 찾지 못했다면 보낸 코인은 판 것으로, 받은 코인은 취득가
+                    0원으로 계산되어 이만큼 세금을 더 냈을 것입니다.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {report.matching.years
+                    .filter((y) => y.unmatched.gt(y.actual))
+                    .map((y) => (
+                      <span key={y.year} className="rounded-lg bg-white/15 px-2.5 py-1 tabular-nums">
+                        {y.year}년: {formatKrw(y.unmatched.toFixed(0))} → {formatKrw(y.actual.toFixed(0))}
+                      </span>
+                    ))}
+                </div>
+              </section>
+            );
+          })()}
+
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold">연도별 예상 세액{report.mode === "simulate" && " (모의)"}</h2>
