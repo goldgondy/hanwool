@@ -276,3 +276,65 @@ describe("코인 수수료 정책", () => {
     expect(r.years[0].netKrw.toNumber()).toBe(0);
   });
 });
+
+describe("총평균법 (소득세법 시행령 제88조①)", () => {
+  // 1월 1 BTC @1억 매수 → 3월 1 BTC 매도 @1.5억 → 6월 1 BTC @2억 매수
+  const events = () => [
+    buy("2027-01-10T00:00:00", "BTC", 1, 100_000_000),
+    sell("2027-03-01T00:00:00", "BTC", 1, 150_000_000),
+    buy("2027-06-01T00:00:00", "BTC", 1, 200_000_000),
+  ];
+
+  it("그 해 전체 평균단가로 원가를 정한다 (매도 뒤에 산 것도 평균에 들어간다)", () => {
+    const r = runEngine(events(), {});
+    // 평균단가 = (1억 + 2억) ÷ 2 = 1.5억 → 3월 매도 원가 1.5억, 손익 0
+    expect(r.disposals[0].costKrw.toNumber()).toBe(150_000_000);
+    expect(r.disposals[0].gainKrw.toNumber()).toBe(0);
+    // 남은 1 BTC는 1.5억으로 다음 해로
+    expect(r.pools.get("BTC")!.costKrw.toNumber()).toBe(150_000_000);
+    expect(r.warnings).toHaveLength(0);
+  });
+
+  it("이동평균법이면 결과가 다르다 (비교용)", () => {
+    const r = runEngine(events(), {}, { feeTreatment: "expense", costMethod: "moving-average" });
+    expect(r.disposals[0].gainKrw.toNumber()).toBe(50_000_000);
+    expect(r.pools.get("BTC")!.costKrw.toNumber()).toBe(200_000_000);
+  });
+
+  it("다음 해 평균단가는 기초 보유분(전년 평균단가)과 그 해 취득분으로 다시 구한다", () => {
+    const r = runEngine(
+      [
+        ...events(),
+        buy("2028-02-01T00:00:00", "BTC", 1, 90_000_000),
+        sell("2028-03-01T00:00:00", "BTC", 1, 130_000_000),
+      ],
+      {},
+    );
+    // 2028 평균단가 = (1.5억 + 0.9억) ÷ 2 = 1.2억 → 손익 1천만
+    expect(r.disposals[1].costKrw.toNumber()).toBe(120_000_000);
+    expect(r.years.find((y) => y.year === 2028)!.netKrw.toNumber()).toBe(10_000_000);
+  });
+
+  it("2026년 말 보유분은 의제취득가가 반영된 원가로 2027년 평균에 들어간다", () => {
+    const r = runEngine(
+      [
+        buy("2025-03-01T00:00:00", "ETH", 2, 4_000_000),
+        sell("2027-02-01T00:00:00", "ETH", 1, 6_000_000),
+        buy("2027-05-01T00:00:00", "ETH", 1, 7_000_000),
+      ],
+      { ETH: D(5_000_000) },
+    );
+    // 의제: max(400만, 2 × 500만 = 1천만) = 1천만 → 2027 평균 = (1천만 + 700만) ÷ 3
+    expect(r.deemed[0].appliedCostKrw.toNumber()).toBe(10_000_000);
+    expect(r.disposals[0].costKrw.toFixed(0)).toBe("5666667");
+  });
+
+  it("매도가 그 시점 보유보다 많아도 같은 해에 들어온 수량으로 메워지면 원가는 평균단가, 경고만 한다", () => {
+    const r = runEngine(
+      [sell("2027-03-01T00:00:00", "SOL", 2, 600_000), buy("2027-03-05T00:00:00", "SOL", 2, 400_000)],
+      {},
+    );
+    expect(r.disposals[0].costKrw.toNumber()).toBe(400_000);
+    expect(r.warnings.map((w) => w.message).join(" ")).toContain("그 시점 보유 수량보다");
+  });
+});

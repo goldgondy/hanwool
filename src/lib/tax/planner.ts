@@ -9,7 +9,7 @@ import { BASIC_DEDUCTION_KRW, INCOME_TAX_RATE, LOCAL_TAX_RATE } from "./rules";
 export interface PlanHolding {
   asset: string;
   qty: Decimal;
-  cost: Decimal; // 보유분 전체 취득가 (이동평균, 의제취득가 반영)
+  cost: Decimal; // 보유분 전체 취득가 (총평균법 — 올해 지금까지의 평균단가, 의제취득가 반영)
   price: Decimal | null; // 현재 원화 시세
 }
 

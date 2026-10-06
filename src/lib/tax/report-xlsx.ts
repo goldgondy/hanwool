@@ -99,7 +99,7 @@ export async function buildTaxWorkbook({ mode, engine, built }: TaxReportInput):
   }
   summary.addRow({});
   summary.addRow({ year: mode === "simulate" ? "※ 모의 계산: 모든 거래에 과세한다고 가정한 참고용 결과입니다 (실제 과세는 2027년부터)." : "※ 추정치입니다. 신고 전에 세무 전문가의 검토를 받으세요." });
-  summary.addRow({ year: "※ 취득가액 산정: 이동평균법. 2027-01-01 이전 보유분은 실제 취득가액과 2026-12-31 시가 중 큰 금액(의제취득가액)." });
+  summary.addRow({ year: "※ 취득가액 산정: 총평균법 (소득세법 시행령 제88조①, 거주자별·연도별 평균단가). 2027-01-01 이전 보유분은 실제 취득가액과 2026-12-31 시가 중 큰 금액(의제취득가액)." });
 
   // 2) 자산별손익
   const byAsset = sheet("자산별손익", [
